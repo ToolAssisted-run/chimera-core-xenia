@@ -812,16 +812,22 @@ movie that presses Start at frame 1300 and A at 1600 and 1800:
 | 1750 | the main menu: Story (New Game), Race, Options, Extras |
 | 1950, 2099 | Story - New Game: choose difficulty |
 
-**Not done.** What a game saves stays in the machine: nothing brings it
-out (the frontend's Export Save Data) or puts a save in before the game
-starts (a project's save slot); the Vita3K core has both to copy. Nobody
-has played past the menu, so no level has been drawn. The profile's name
-and identity are fixed and are not settings.
+**Out, and not yet in.** The frontend's Export Save Data brings out every
+file of the console's content storage, by its path there
+(`content/B13EBABEBABEBABE/...`): after a hundred frames that is four
+files, the profile's account and its two records among them. Nothing puts a
+save IN before the game starts (a project's save slot); the Vita3K core has
+that to copy, and it needs a zip reader this core does not link yet.
+
+**Not done.** Nobody has played past the menu, so no level has been drawn
+and no game has been seen to save. The profile's name and identity are
+fixed and are not settings.
 
 ## The gate (2026-10-10)
 
-`waterbox/run-gate.sh`, 13 legs with `CHIMERA_ROOT` set and 10 without,
-eight minutes. The three it adds are the frontend's, described under M5. The
+`waterbox/run-gate.sh`, 14 legs with `CHIMERA_ROOT` set and 10 without,
+eight minutes. The four it adds are the frontend's: three described under
+M5, and the save data export. The
 ten: two native runs are one run
 and a run with another instruction cost is another; the sandbox is the
 native run at every sixtieth frame; a button makes another run, the same in

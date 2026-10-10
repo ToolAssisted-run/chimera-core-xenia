@@ -244,6 +244,19 @@ CORE_EXPORT void RemakeRenderer(void) { chimera_xenia::remake_renderer(); }
 
 CORE_EXPORT int InputWasRead(void) { return chimera_xenia::input_was_read() ? 1 : 0; }
 
+// Save data out (the frontend's Export Save Data): a snapshot of what the
+// console keeps - its profile and what games saved - then each file by index.
+CORE_EXPORT int32_t GetSaveDataFileCount(void) { return static_cast<int32_t>(chimera_xenia::savedata_snapshot()); }
+CORE_EXPORT const char* GetSaveDataFileName(int32_t i) {
+  return chimera_xenia::savedata_name(static_cast<size_t>(i)).c_str();
+}
+CORE_EXPORT int64_t GetSaveDataFileSize(int32_t i) {
+  return static_cast<int64_t>(chimera_xenia::savedata_bytes(static_cast<size_t>(i)).size());
+}
+CORE_EXPORT const uint8_t* GetSaveDataFileBuffer(int32_t i) {
+  return chimera_xenia::savedata_bytes(static_cast<size_t>(i)).data();
+}
+
 // No memory domain. The console's 512 MiB are one block that never moves,
 // but a block a tool may not read by itself: the program closes pages of it
 // (a read then faults, for a tool as for the program) and the renderer

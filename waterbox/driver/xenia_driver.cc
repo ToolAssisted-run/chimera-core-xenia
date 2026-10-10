@@ -677,6 +677,33 @@ uint64_t ram_digest() {
   return h;
 }
 
+namespace {
+struct SavedFile {
+  std::string name;
+  std::vector<uint8_t> data;
+};
+std::vector<SavedFile> g_saved;
+const std::string g_no_name;
+const std::vector<uint8_t> g_no_bytes;
+}  // namespace
+
+size_t savedata_snapshot() {
+  g_saved.clear();
+  const std::string content = std::string(chimera::memfs::ROOT) + "/content";
+  for (const std::string& relative : chimera::memfs::list(content)) {
+    SavedFile file;
+    file.name = "content/" + relative;
+    if (chimera::memfs::get(content + "/" + relative, file.data)) {
+      g_saved.push_back(std::move(file));
+    }
+  }
+  return g_saved.size();
+}
+const std::string& savedata_name(size_t index) { return index < g_saved.size() ? g_saved[index].name : g_no_name; }
+const std::vector<uint8_t>& savedata_bytes(size_t index) {
+  return index < g_saved.size() ? g_saved[index].data : g_no_bytes;
+}
+
 bool watched_access(void* host_address, bool is_write) {
   auto* handler = xe::cpu::MMIOHandler::global_handler();
   return handler && handler->HandleWatchedAccess(host_address, is_write);

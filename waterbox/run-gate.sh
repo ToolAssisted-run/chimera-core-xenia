@@ -229,10 +229,12 @@ if [ -z "$chimera_root" ] || [ ! -x "$engine" ] || [ ! -f "$package" ]; then
 	report "frontend:picture" SKIP "$why"
 	report "frontend:states" SKIP "$why"
 	report "frontend:no-card" SKIP "$why"
+	report "frontend:savedata" SKIP "$why"
 elif [ "$have_sandbox" = 0 ]; then
 	report "frontend:picture" SKIP "$why_sandbox"
 	report "frontend:states" SKIP "$why_sandbox"
 	report "frontend:no-card" SKIP "$why_sandbox"
+	report "frontend:savedata" SKIP "$why_sandbox"
 else
 	fe_frames=100
 	shot=80
@@ -263,12 +265,21 @@ else
 	fi
 	env -u DISPLAY "$engine" "$package" "$game" "$work/fe.movie" > "$work/fe-nocard.out" 2>&1
 	refused=$?
-	env -u DISPLAY "$engine" "$package" "$game" "$work/fe.movie" --settings '{"renderer":"null"}' > "$work/fe-null.out" 2>&1
+	env -u DISPLAY "$engine" "$package" "$game" "$work/fe.movie" --settings '{"renderer":"null"}' --export-savedata "$work/fe-saved" > "$work/fe-null.out" 2>&1
 	ran=$?
 	if [ "$refused" != 0 ] && grep -q "the Vulkan renderer needs a device" "$work/fe-nocard.out" && [ "$ran" = 0 ] && grep -q "^frames=$fe_frames" "$work/fe-null.out"; then
 		report "frontend:no-card" PASS "with no card handed over the package refuses to start and says why (exit $refused); with the renderer that draws nothing it runs its $fe_frames frames"
 	else
 		report "frontend:no-card" FAIL "no card: exit $refused [$(tail -1 "$work/fe-nocard.out")]; renderer null: exit $ran [$(tail -1 "$work/fe-null.out")]"
+	fi
+	# What the console keeps comes out through the engine's save data export:
+	# the profile that is always signed in is there by name, with its account.
+	account="$work/fe-saved/content/B13EBABEBABEBABE/FFFE07D1/00010000/B13EBABEBABEBABE/Account"
+	kept="$(find "$work/fe-saved" -type f 2> /dev/null | wc -l)"
+	if [ "$ran" = 0 ] && [ -s "$account" ] && grep -q "^savedata=$kept" "$work/fe-null.out"; then
+		report "frontend:savedata" PASS "the engine's save data export brings out $kept files of the console's storage, the signed-in profile's account among them ($(wc -c < "$account") bytes)"
+	else
+		report "frontend:savedata" FAIL "$kept files exported; $(grep '^savedata=' "$work/fe-null.out" | head -1); the profile's account $( [ -s "$account" ] && echo is || echo is not ) there"
 	fi
 fi
 

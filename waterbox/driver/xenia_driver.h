@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace chimera_xenia {
 
@@ -73,6 +74,13 @@ uint64_t gpu_counter();
 // observer: a page the program has closed is read all the same, and nobody
 // in the machine is told.
 uint64_t ram_digest();
+
+// What the console keeps - its profile, and what games saved - as it stands
+// now: every file of the machine's content storage, in name order. The count;
+// then each by index until the next snapshot.
+size_t savedata_snapshot();
+const std::string& savedata_name(size_t index);
+const std::vector<uint8_t>& savedata_bytes(size_t index);
 
 // A fault the sandbox hands back: a page somebody in the emulator watches
 // (the renderer's caches watch the console's memory) was touched. True when
