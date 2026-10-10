@@ -2355,6 +2355,28 @@ index 15044536f..e748dfa46 100644
  
    // Shader and pipeline storage.
    uint32_t shader_storage_title_id_ = 0;
+diff --git a/src/xenia/kernel/kernel_state.cc b/src/xenia/kernel/kernel_state.cc
+index 0840cae09..340b27559 100644
+--- a/src/xenia/kernel/kernel_state.cc
++++ b/src/xenia/kernel/kernel_state.cc
+@@ -701,7 +701,7 @@ X_RESULT KernelState::ApplyTitleUpdate(
+       XELOGW(
+           "Skipping incompatible title update for {} due to signature mismatch",
+           title_module->name());
+-      if (!GetExecutableModule()) {
++      if (!GetExecutableModule() && emulator_->display_window()) {  // chimera
+         emulator_->display_window()->app_context().CallInUIThread([&]() {
+           new xe::ui::HostNotificationWindow(
+               emulator_->imgui_drawer(), "Warning!",
+@@ -718,7 +718,7 @@ X_RESULT KernelState::ApplyTitleUpdate(
+         "Applying incompatible title update for {} due to enabled "
+         "allow_incompatible_title_update config option!",
+         title_module->name());
+-    if (!GetExecutableModule()) {
++    if (!GetExecutableModule() && emulator_->display_window()) {  // chimera
+       emulator_->display_window()->app_context().CallInUIThread([&]() {
+         new xe::ui::HostNotificationWindow(
+             emulator_->imgui_drawer(), "Warning!",
 diff --git a/src/xenia/kernel/kernel_state.h b/src/xenia/kernel/kernel_state.h
 index 6752e5675..9e8bdb364 100644
 --- a/src/xenia/kernel/kernel_state.h

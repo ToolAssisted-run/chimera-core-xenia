@@ -14,10 +14,13 @@ Where it stands (2026-10-10): the owner's one game runs in the sandbox, a
 frame at a time, to the same memory, sound and schedule as the native build,
 draws through miniBox's Vulkan bridge the pictures the native build draws,
 and loads a state with that renderer - on a new device, in another process -
-to the picture it would have had. All of it on a software Vulkan (llvmpipe)
-and on one game's first seconds. It is not yet a package the frontend can
-open, and it has not met a real card. This file is the survey, the route,
-and what each step measured.
+to the picture it would have had. As a package it runs in the frontend's
+headless runner, on Linux on a software Vulkan and on Windows on a GeForce
+GTX 1060, where the one game there is reaches its title screen and answers
+the Start button. It stops there: the game asks to sign in, and there is no
+profile and nowhere to save. It runs at about a ninth of real time. Nothing
+is published, and the frontend's half is a branch. This file is the survey,
+the route, and what each step measured.
 
 ## The pin
 
@@ -732,6 +735,52 @@ game that opens a socket would end the machine (a guest may not), and
 nothing answers "there is no network" for it yet. The licence list was
 written from the tree and has not been reviewed; nothing may be published
 on it as it stands.
+
+## A real card, and the first thing the game asked for (2026-10-10)
+
+The package, in `chimera-run.exe` cross-built from the Chimera branch and
+run on Windows through WSL's interop (staged in a folder of its own, the
+disc image read from where the owner keeps it):
+
+    chimera vk: the bridge was handed over
+    chimera vk: NVIDIA GeForce GTX 1060 6GB (Vulkan 1.4.312, driver 69.168.0)
+
+| what | result |
+| --- | --- |
+| 100 idle frames recorded, then played back | runs; 8 host seconds |
+| the same with the engine's save and load before every frame | runs; the picture at frame 80 is the picture without |
+| the card's picture of a frame against llvmpipe's of the same frame | the same picture from another rasteriser: no channel differs by more than 4 in 255 |
+| 2400 idle frames (forty seconds of the machine's time) | the publisher's logo, the developer's, and from frame 1200 the title screen - the logo, "Press START button" and the city behind it, drawn right; 373 host seconds |
+| a movie that presses Start at frame 1300 | at first, the end of the machine (below); then the game's own dialog: "You are not signed in. In order to save progress, you will need to be signed in. Do you want to sign in now?" |
+
+So a pad reaches the game and the game acts on it - which the gate's pad
+leg, on the first five seconds, could not show.
+
+**The crash was the emulator's, and was two things.** The game answered
+Start by asking the console for its sign-in screen. Upstream has an answer
+for when nobody is there (`headless`), and that answer was given through
+the window - of which there is none: a null pointer, and miniBox's note
+named the function. The same answer then starts a host thread to say, 200
+ms later, that the console's screen has closed: a thread outside the
+schedule, sleeping on the host. Now the answer is given where it is asked
+when there is no window, and "closed" is said by a thread of the machine's,
+on the machine's clock (patch 0002, with the same guard for an achievement's
+notice, which would have ended the machine at the first achievement).
+
+**What the game wants next** is what this core does not have: a profile to
+be signed in as, and storage for it to save to. Upstream keeps both in
+directories of the host, and a guest has none. That is the next piece of
+work - the emulator's storage in the machine's own memory (the Vita3K core
+has one to copy), with one profile that is always signed in - and until it
+exists a game stops where this one stops, or runs without saving if it
+lets you decline.
+
+**Speed.** Forty seconds of the machine in 373: about a ninth of real time,
+on a logo and a title screen, with a screenshot every five seconds. Nothing
+has been measured about where it goes. The first suspects are the ones the
+RPCS3 and Vita3K cores had: what an instruction is charged (250 ps is a
+guess that makes the host run four billion guest instructions a second of
+the machine's time), and how often the baton is handed over.
 
 ## The gate (2026-10-10)
 

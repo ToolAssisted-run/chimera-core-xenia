@@ -89,3 +89,82 @@ index eadd15ccf..81797f232 100644
          display_window_->SetIcon(icon_block.data(), icon_block.size());
        }
      }
+diff --git a/src/xenia/kernel/xam/achievement_manager.cc b/src/xenia/kernel/xam/achievement_manager.cc
+index c489a6f19..ed3ca2323 100644
+--- a/src/xenia/kernel/xam/achievement_manager.cc
++++ b/src/xenia/kernel/xam/achievement_manager.cc
+@@ -146,6 +146,10 @@ void AchievementManager::ShowAchievementEarnedNotification(
+                   xe::to_utf8(achievement->achievement_name));
+ 
+   const Emulator* emulator = kernel_state()->emulator();
++  // chimera: with no window there is nobody to tell
++  if (!emulator->display_window()) {
++    return;
++  }
+   ui::WindowedAppContext& app_context =
+       emulator->display_window()->app_context();
+   ui::ImGuiDrawer* imgui_drawer = emulator->imgui_drawer();
+diff --git a/src/xenia/kernel/xam/xam_ui.cc b/src/xenia/kernel/xam/xam_ui.cc
+index f398427fc..0f0990562 100644
+--- a/src/xenia/kernel/xam/xam_ui.cc
++++ b/src/xenia/kernel/xam/xam_ui.cc
+@@ -142,20 +142,36 @@ X_RESULT xeXamDispatchDialogEx(
+   }
+ }
+ 
++// chimera: "the system's UI has closed", a little later. Upstream starts a
++// host thread to say it. With one thread running at a time on the machine's
++// own clock the thread has to be one of the machine's - a host thread
++// sleeping on the host would say it at a moment no two runs agree on, and in
++// a sandbox would not be one of the schedule's at all.
++static void ChimeraSayUiClosedLater() {
++#ifdef CHIMERA_VSCHED
++  xe::threading::Thread::CreationParameters parameters;
++  auto thread = xe::threading::Thread::Create(parameters, []() {
++    xe::threading::Sleep(kUIDelayMillis);
++    kernel_state()->BroadcastNotification(kXNotificationSystemUI, false);
++  });
++  // it ends by itself; nobody waits for it
++  (void)thread.release();
++#else
++  std::jthread t([]() {
++    xe::threading::Sleep(kUIDelayMillis);
++    kernel_state()->BroadcastNotification(kXNotificationSystemUI, false);
++  });
++  t.detach();
++#endif
++}
++
+ X_RESULT xeXamDispatchHeadless(std::function<X_RESULT()> run_callback,
+                                uint32_t overlapped) {
+   auto pre = []() {
+     kernel_state()->BroadcastNotification(kXNotificationSystemUI, true);
+     xe::threading::Sleep(std::chrono::milliseconds(25));
+   };
+-  auto post = []() {
+-    std::jthread t([]() {
+-      xe::threading::Sleep(kUIDelayMillis);
+-      kernel_state()->BroadcastNotification(kXNotificationSystemUI, false);
+-    });
+-
+-    t.detach();
+-  };
++  auto post = []() { ChimeraSayUiClosedLater(); };
+   if (!overlapped) {
+     pre();
+     auto result = run_callback();
+@@ -220,6 +236,14 @@ X_RESULT xeXamDispatchHeadlessAsync(std::function<void()> run_callback) {
+   kernel_state()->BroadcastNotification(kXNotificationSystemUI, true);
+ 
+   auto display_window = kernel_state()->emulator()->display_window();
++  if (!display_window) {
++    // chimera: nobody is there, and there is no UI thread to answer on: the
++    // answer is given here, and the UI is said to have closed a little later
++    run_callback();
++    kernel_state()->xam_state()->is_xam_dialog_present_.store(false);
++    ChimeraSayUiClosedLater();
++    return X_ERROR_SUCCESS;
++  }
+   display_window->app_context().CallInUIThread([run_callback]() {
+     run_callback();
+ 

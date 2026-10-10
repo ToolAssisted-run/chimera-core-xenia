@@ -16,7 +16,7 @@ xenia="$root/extern/xenia"
 # name | paths (space separated), in the order the patches apply
 series='
 0001-chimera-a-build-with-no-desktop|CMakeLists.txt third_party/CMakeLists.txt cmake/XeniaHelpers.cmake src/xenia/CMakeLists.txt src/xenia/ui/CMakeLists.txt src/xenia/base/CMakeLists.txt src/xenia/ui/imgui_drawer.cc src/xenia/ui/chimera_headless.cc src/xenia/ui/vulkan/vulkan_api.h src/xenia/ui/vulkan/vulkan_presenter.cc src/xenia/ui/vulkan/vulkan_provider.cc src/xenia/gpu/null/null_graphics_system.cc
-0002-chimera-an-emulator-with-no-window|src/xenia/emulator.cc
+0002-chimera-an-emulator-with-no-window|src/xenia/emulator.cc src/xenia/kernel/xam/xam_ui.cc src/xenia/kernel/xam/achievement_manager.cc
 0003-chimera-one-thread-at-a-time-on-one-clock|*
 0004-chimera-what-gcc-will-not-take|src/xenia/base/cvar.h src/xenia/base/memory.cc src/xenia/gpu/command_processor.h
 0005-chimera-the-instruction-tests-in-one-process|src/xenia/cpu/ppc/testing/ppc_testing_main.cc src/xenia/cpu/ppc/testing/CMakeLists.txt
