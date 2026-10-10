@@ -1,8 +1,8 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 30febc4b7..b2a00e543 100644
+index 30febc4b7..76c31011d 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -36,6 +36,24 @@ message(STATUS "Target architecture: XE_TARGET_AARCH64=${XE_TARGET_AARCH64} XE_T
+@@ -36,6 +36,29 @@ message(STATUS "Target architecture: XE_TARGET_AARCH64=${XE_TARGET_AARCH64} XE_T
  # Options
  option(XENIA_BUILD_TESTS "Build test suites" OFF)
  option(XENIA_BUILD_MISC "Build misc subprojects (trace viewers, shader compiler, vfs-dump, demos)" OFF)
@@ -21,13 +21,18 @@ index 30febc4b7..b2a00e543 100644
 +# chimera: the emulated memory as one block, with no views of a shared mapping
 +# (src/xenia/base/chimera_flatmem.h)
 +option(CHIMERA_FLATMEM "The console's memory with no aliased views" OFF)
++# chimera: a disc image is read where it would have been mapped whole
++option(CHIMERA_NOFILEMAP "Read a disc image instead of mapping it" OFF)
++if(CHIMERA_NOFILEMAP)
++  add_compile_definitions(CHIMERA_NOFILEMAP=1)
++endif()
 +if(CHIMERA_FLATMEM)
 +  add_compile_definitions(CHIMERA_FLATMEM=1)
 +endif()
  
  # Toggle profiler
  add_compile_definitions(XE_OPTION_PROFILING=0)
-@@ -248,6 +266,9 @@ else()
+@@ -248,6 +271,9 @@ else()
        pthread
      )
    elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -37,7 +42,7 @@ index 30febc4b7..b2a00e543 100644
      # GTK3 via pkg-config
      find_package(PkgConfig REQUIRED)
      pkg_check_modules(GTK3 REQUIRED gtk+-x11-3.0)
-@@ -257,6 +278,7 @@ else()
+@@ -257,6 +283,7 @@ else()
  
      # Global Linux libraries
      link_libraries(stdc++fs dl lz4 pthread rt)
@@ -45,7 +50,7 @@ index 30febc4b7..b2a00e543 100644
  
      # Link groups for executables (resolves circular deps)
      set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--start-group")
-@@ -292,9 +314,12 @@ else()
+@@ -292,9 +319,12 @@ else()
    add_compile_options($<$<CONFIG:Release>:-O3>)
    # Link-time optimization (use lld and llvm-ar/ranlib to avoid system
    # linker/archiver LTO plugin version mismatch with clang's bitcode)
@@ -126,6 +131,21 @@ index 1f7a88d01..fc582b9dc 100644
  get_target_property(_base_srcs xenia-base SOURCES)
  if(_base_exclude AND _base_srcs)
    list(REMOVE_ITEM _base_srcs ${_base_exclude})
+diff --git a/src/xenia/gpu/null/null_graphics_system.cc b/src/xenia/gpu/null/null_graphics_system.cc
+index b5059db1c..cd6284d08 100644
+--- a/src/xenia/gpu/null/null_graphics_system.cc
++++ b/src/xenia/gpu/null/null_graphics_system.cc
+@@ -27,7 +27,9 @@ X_STATUS NullGraphicsSystem::Setup(cpu::Processor* processor,
+                                    kernel::KernelState* kernel_state,
+                                    ui::WindowedAppContext* app_context,
+                                    bool with_presentation) {
+-#if XE_PLATFORM_MAC
++// chimera: a headless build has no UI to need a Vulkan device through this,
++// and a renderer that draws nothing should not need one to exist
++#if XE_PLATFORM_MAC || defined(CHIMERA_HEADLESS)
+   provider_ = nullptr;
+ #else
+   // This is a null graphics system, but we still setup vulkan because UI needs
 diff --git a/src/xenia/ui/CMakeLists.txt b/src/xenia/ui/CMakeLists.txt
 index fc0d69f85..4fc8d0702 100644
 --- a/src/xenia/ui/CMakeLists.txt
@@ -297,6 +317,46 @@ index 68b97e788..112d1b46a 100644
          ConsumeGuestOutput(guest_output_mailbox_index, &guest_output_properties,
                             &guest_output_paint_config));
      if (guest_output_mailbox_index != UINT32_MAX) {
+diff --git a/src/xenia/ui/vulkan/vulkan_provider.cc b/src/xenia/ui/vulkan/vulkan_provider.cc
+index 41fa12fb8..eba50b215 100644
+--- a/src/xenia/ui/vulkan/vulkan_provider.cc
++++ b/src/xenia/ui/vulkan/vulkan_provider.cc
+@@ -36,8 +36,17 @@ std::unique_ptr<VulkanProvider> VulkanProvider::Create(
+     const bool with_gpu_emulation, const bool with_presentation) {
+   std::unique_ptr<VulkanProvider> provider(new VulkanProvider());
+ 
++#ifdef CHIMERA_HEADLESS
++  // chimera: presentation with nothing to present to. The presenter's image
++  // of what the console shows is wanted - it is read back - and a surface, a
++  // swapchain and a queue that can present are not.
++  const bool with_surface = false;
++#else
++  const bool with_surface = with_presentation;
++#endif
++
+   provider->vulkan_instance_ =
+-      VulkanInstance::Create(with_presentation, cvars::vulkan_validation);
++      VulkanInstance::Create(with_surface, cvars::vulkan_validation);
+   if (!provider->vulkan_instance_) {
+     return nullptr;
+   }
+@@ -72,14 +81,14 @@ std::unique_ptr<VulkanProvider> VulkanProvider::Create(
+     provider->vulkan_device_ = VulkanDevice::CreateIfSupported(
+         provider->vulkan_instance_.get(),
+         physical_devices[preferred_physical_device_index], with_gpu_emulation,
+-        with_presentation);
++        with_surface);
+   }
+ 
+   if (!provider->vulkan_device_) {
+     for (const VkPhysicalDevice physical_device : physical_devices) {
+       provider->vulkan_device_ = VulkanDevice::CreateIfSupported(
+           provider->vulkan_instance_.get(), physical_device, with_gpu_emulation,
+-          with_presentation);
++          with_surface);
+       if (provider->vulkan_device_) {
+         break;
+       }
 diff --git a/third_party/CMakeLists.txt b/third_party/CMakeLists.txt
 index 808f0ee9f..3bc9fba2e 100644
 --- a/third_party/CMakeLists.txt

@@ -15,10 +15,24 @@ index 28d7a622e..c7874ed48 100644
  xe_target_defaults(xenia-cpu-ppc-tests)
  add_test(NAME xenia-cpu-ppc-tests COMMAND xenia-cpu-ppc-tests)
 diff --git a/src/xenia/cpu/ppc/testing/ppc_testing_main.cc b/src/xenia/cpu/ppc/testing/ppc_testing_main.cc
-index c60bc872e..ad4d8ace1 100644
+index c60bc872e..b5739c54d 100644
 --- a/src/xenia/cpu/ppc/testing/ppc_testing_main.cc
 +++ b/src/xenia/cpu/ppc/testing/ppc_testing_main.cc
-@@ -472,6 +472,25 @@ class TestRunner {
+@@ -289,6 +289,13 @@ class TestRunner {
+         0x10001000, 0xEFFF, 0,
+         kMemoryAllocationReserve | kMemoryAllocationCommit,
+         kMemoryProtectRead | kMemoryProtectWrite);
++#ifdef CHIMERA_INPROCESS_TESTS
++    // chimera: and empty it. A forked child starts with memory nobody has
++    // written; in one process this is the last test's, and a test that
++    // checks more bytes than it sets (stdcx_fail checks three more) then
++    // passes or fails by which test ran before it.
++    std::memset(processor_->memory()->TranslateVirtual(0x10001000), 0, 0xEFFF);
++#endif
+ 
+     // Simulate a thread.
+     uint32_t stack_size = 64 * 1024;
+@@ -472,6 +479,25 @@ class TestRunner {
  
  bool DiscoverTests(const std::filesystem::path& test_path,
                     std::vector<std::filesystem::path>& test_files) {
@@ -44,7 +58,7 @@ index c60bc872e..ad4d8ace1 100644
    auto file_infos = xe::filesystem::ListFiles(
        std::filesystem::path(XE_SOURCE_ROOT) / test_path);
    for (auto& file_info : file_infos) {
-@@ -495,7 +514,7 @@ int filter(unsigned int code) {
+@@ -495,7 +521,7 @@ int filter(unsigned int code) {
  }
  #endif  // XE_COMPILER_MSVC
  
@@ -53,7 +67,7 @@ index c60bc872e..ad4d8ace1 100644
  // Run test in isolated child process to catch crashes
  enum class TestResult {
    kPassed,
-@@ -599,7 +618,7 @@ TestResult RunTestInChildProcess(TestSuite& test_suite, TestCase& test_case) {
+@@ -599,7 +625,7 @@ TestResult RunTestInChildProcess(TestSuite& test_suite, TestCase& test_case) {
  void ProtectedRunTest(TestSuite& test_suite, TestRunner& runner,
                        TestCase& test_case, int& failed_count,
                        int& passed_count) {
@@ -62,7 +76,7 @@ index c60bc872e..ad4d8ace1 100644
    try {
      if (!runner.Setup(test_suite)) {
        fprintf(stderr, "  [%s] FAILED SETUP\n", test_case.name.c_str());
-@@ -712,7 +731,7 @@ bool RunTests(const std::vector<std::string>& test_names) {
+@@ -712,7 +738,7 @@ bool RunTests(const std::vector<std::string>& test_names) {
  
    auto start_time = std::chrono::steady_clock::now();
  

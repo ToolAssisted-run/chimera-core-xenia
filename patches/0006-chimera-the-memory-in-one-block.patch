@@ -231,6 +231,117 @@ index f59af1102..72f4a8a37 100644
        }
        addr = e.GetMembaseReg() + e.rax;
      }
+diff --git a/src/xenia/cpu/mmio_handler.cc b/src/xenia/cpu/mmio_handler.cc
+index c7cc7815e..774a0baf6 100644
+--- a/src/xenia/cpu/mmio_handler.cc
++++ b/src/xenia/cpu/mmio_handler.cc
+@@ -10,6 +10,7 @@
+ #include "xenia/cpu/mmio_handler.h"
+ 
+ #include <cstring>
++#include <vector>
+ 
+ #include "xenia/base/assert.h"
+ #include "xenia/base/byte_order.h"
+@@ -399,6 +400,60 @@ bool MMIOHandler::ExceptionCallbackThunk(Exception* ex, void* data) {
+   return reinterpret_cast<MMIOHandler*>(data)->ExceptionCallback(ex);
+ }
+ 
++// chimera: see the header
++namespace {
++bool g_observing = false;
++std::vector<void*>* g_observer_opened = nullptr;
++
++// A read by the observer of a page nobody may read: open it, remember it.
++bool ObserverOpens(void* host_address, bool is_write) {
++  if (!g_observing || is_write) {
++    return false;
++  }
++  void* page = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(host_address) &
++                                       ~uintptr_t(0xFFF));
++  if (!xe::memory::Protect(page, 0x1000, xe::memory::PageAccess::kReadOnly,
++                           nullptr)) {
++    return false;
++  }
++  g_observer_opened->push_back(page);
++  return true;
++}
++}  // namespace
++
++void MMIOHandler::BeginObserving() {
++  if (!g_observer_opened) {
++    g_observer_opened = new std::vector<void*>();
++    // no allocation where the fault is handled
++    g_observer_opened->reserve(0x100000);
++  }
++  g_observing = true;
++}
++
++void MMIOHandler::EndObserving() {
++  g_observing = false;
++  for (void* page : *g_observer_opened) {
++    xe::memory::Protect(page, 0x1000, xe::memory::PageAccess::kNoAccess,
++                        nullptr);
++  }
++  g_observer_opened->clear();
++}
++
++bool MMIOHandler::HandleWatchedAccess(void* host_address, bool is_write) {
++  if (reinterpret_cast<uint8_t*>(host_address) < virtual_membase_ ||
++      reinterpret_cast<uint8_t*>(host_address) > memory_end_ ||
++      !access_violation_callback_) {
++    return false;
++  }
++  if (ObserverOpens(host_address, is_write)) {
++    return true;
++  }
++  auto lock = global_critical_region_.Acquire();
++  return access_violation_callback_(std::move(lock),
++                                    access_violation_callback_context_,
++                                    host_address, is_write);
++}
++
+ bool MMIOHandler::ExceptionCallback(Exception* ex) {
+   if (ex->code() != Exception::Code::kAccessViolation) {
+     return false;
+@@ -419,6 +474,11 @@ bool MMIOHandler::ExceptionCallback(Exception* ex) {
+ 
+   void* fault_host_address = reinterpret_cast<void*>(ex->fault_address());
+ 
++  // chimera: an observer's read of a closed page (see the header)
++  if (ObserverOpens(fault_host_address, is_write)) {
++    return true;
++  }
++
+   // Access violations are pretty rare, so we can do a linear search here.
+   // Only check if in the virtual range, as we only support virtual ranges.
+   const MMIORange* range = nullptr;
+diff --git a/src/xenia/cpu/mmio_handler.h b/src/xenia/cpu/mmio_handler.h
+index 31ade5351..678254aca 100644
+--- a/src/xenia/cpu/mmio_handler.h
++++ b/src/xenia/cpu/mmio_handler.h
+@@ -65,6 +65,21 @@ class MMIOHandler {
+       MmioAccessRecordCallback record_mmio_callback, void* record_mmio_context);
+   static MMIOHandler* global_handler() { return global_handler_; }
+ 
++  // chimera: a fault as a sandbox hands it over - an address and whether it
++  // was a write, and no processor state. The device registers are found by
++  // address in such a build (emit_inline_mmio_checks), so what is left to
++  // fault is a page somebody watches. True: the page was let go, try again.
++  bool HandleWatchedAccess(void* host_address, bool is_write);
++
++  // chimera: an observer - a tool, a digest - reads the machine's memory
++  // without being the machine. With one block there is no second, unprotected
++  // way to a page the program has closed (decommitted, or protected against
++  // itself), and a read of one faults for the observer as it would for the
++  // program. Between these two calls such a page is opened for reading when
++  // it faults, and closed again at the end; nobody is told of the access.
++  static void BeginObserving();
++  static void EndObserving();
++
+   bool RegisterRange(uint32_t virtual_address, uint32_t mask, uint32_t size,
+                      void* context, MMIOReadCallback read_callback,
+                      MMIOWriteCallback write_callback);
 diff --git a/src/xenia/cpu/ppc/ppc_context.h b/src/xenia/cpu/ppc/ppc_context.h
 index 0c46e8c1e..c8a749735 100644
 --- a/src/xenia/cpu/ppc/ppc_context.h
@@ -259,6 +370,33 @@ index 0c46e8c1e..c8a749735 100644
      uint8_t* host_address = virtual_membase + guest_address;
  #if XE_PLATFORM_WIN32 == 1
      if (guest_address >=
+diff --git a/src/xenia/cpu/thread_state.cc b/src/xenia/cpu/thread_state.cc
+index 0e0370526..819183d71 100644
+--- a/src/xenia/cpu/thread_state.cc
++++ b/src/xenia/cpu/thread_state.cc
+@@ -25,6 +25,22 @@ thread_local ThreadState* thread_state_ = nullptr;
+ 
+ static void* AllocateContext() {
+   size_t granularity = xe::memory::allocation_granularity();
++#ifdef CHIMERA_FLATMEM
++  // chimera: anywhere. The address below is chosen so that the context
++  // register's low half is 0xE0000000, for a comparison the recompiler makes
++  // when it has to add the 4 KiB of the 0xE0000000 view by hand. With the
++  // memory in one block that is the fold's business, and a guest could not
++  // have an address of its choosing anyway. The room before the context, for
++  // the backend's own data at negative offsets, is kept.
++  if (void* p = memory::AllocFixed(
++          nullptr, granularity + sizeof(ppc::PPCContext),
++          memory::AllocationType::kReserveCommit,
++          memory::PageAccess::kReadWrite)) {
++    return reinterpret_cast<char*>(p) + granularity;
++  }
++  assert_always("giving up on allocating context");
++  return nullptr;
++#endif
+   for (unsigned pos32 = 0x40; pos32 < 8192; ++pos32) {
+     /*
+         we want our register which points to the context to have 0xE0000000 in
 diff --git a/src/xenia/memory.cc b/src/xenia/memory.cc
 index 706bd4809..c64b58a92 100644
 --- a/src/xenia/memory.cc

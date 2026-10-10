@@ -1,0 +1,253 @@
+diff --git a/src/xenia/vfs/devices/disc_image_device.cc b/src/xenia/vfs/devices/disc_image_device.cc
+index 123d5a262..300f20b6f 100644
+--- a/src/xenia/vfs/devices/disc_image_device.cc
++++ b/src/xenia/vfs/devices/disc_image_device.cc
+@@ -7,6 +7,9 @@
+  ******************************************************************************
+  */
+ 
++#include <cstdio>
++#include <vector>
++#include "xenia/base/filesystem.h"
+ #include "xenia/vfs/devices/disc_image_device.h"
+ 
+ #include "xenia/base/literals.h"
+@@ -25,9 +28,62 @@ DiscImageDevice::DiscImageDevice(const std::string_view mount_path,
+                                  const std::filesystem::path& host_path)
+     : Device(mount_path), name_("GDFX"), host_path_(host_path) {}
+ 
++#ifdef CHIMERA_NOFILEMAP
++DiscImageDevice::~DiscImageDevice() {
++  if (image_) {
++    std::fclose(image_);
++  }
++}
++
++bool DiscImageDevice::ReadImage(size_t offset, void* buffer, size_t length) {
++  auto global_lock = global_critical_region_.Acquire();
++  if (!image_ || offset > image_size_ || length > image_size_ - offset) {
++    return false;
++  }
++  if (!xe::filesystem::Seek(image_, static_cast<int64_t>(offset), SEEK_SET)) {
++    return false;
++  }
++  return std::fread(buffer, 1, length, image_) == length;
++}
++#else
+ DiscImageDevice::~DiscImageDevice() = default;
++#endif
+ 
+ bool DiscImageDevice::Initialize() {
++#ifdef CHIMERA_NOFILEMAP
++  image_ = xe::filesystem::OpenFile(host_path_, "rb");
++  if (!image_) {
++    XELOGE("Disc image could not be opened");
++    return false;
++  }
++  xe::filesystem::Seek(image_, 0, SEEK_END);
++  image_size_ = static_cast<size_t>(xe::filesystem::Tell(image_));
++  {
++    ParseState state = {0};
++    state.ptr = nullptr;
++    state.size = image_size_;
++    auto result = Verify(&state);
++    if (result != Error::kSuccess) {
++      XELOGE("Failed to verify disc image header: {}",
++             static_cast<int32_t>(result));
++      return false;
++    }
++    // the root directory's table, read; its children are read as they are met
++    std::vector<uint8_t> root(
++        xe::round_up(state.root_size, size_t(kXESectorSize)));
++    if (!ReadImage(state.root_offset, root.data(),
++                   std::min(root.size(), image_size_ - state.root_offset))) {
++      return false;
++    }
++    result = ReadAllEntries(&state, root.data());
++    if (result != Error::kSuccess) {
++      XELOGE("Failed to read all GDFX entries: {}",
++             static_cast<int32_t>(result));
++      return false;
++    }
++    return true;
++  }
++#endif
+   mmap_ = MappedMemory::Open(host_path_, MappedMemory::Mode::kRead);
+   if (!mmap_) {
+     XELOGE("Disc image could not be mapped");
+@@ -90,7 +146,16 @@ DiscImageDevice::Error DiscImageDevice::Verify(ParseState* state) {
+   if (state->size < state->game_offset + (32 * kXESectorSize)) {
+     return Error::kErrorReadError;
+   }
++#ifdef CHIMERA_NOFILEMAP
++  uint8_t fs_sector[32];
++  if (!ReadImage(state->game_offset + (32 * kXESectorSize), fs_sector,
++                 sizeof(fs_sector))) {
++    return Error::kErrorReadError;
++  }
++  uint8_t* fs_ptr = fs_sector;
++#else
+   uint8_t* fs_ptr = state->ptr + state->game_offset + (32 * kXESectorSize);
++#endif
+   state->root_sector = xe::load<uint32_t>(fs_ptr + 20);
+   state->root_size = xe::load<uint32_t>(fs_ptr + 24);
+   state->root_offset =
+@@ -107,8 +172,14 @@ bool DiscImageDevice::VerifyMagic(ParseState* state, size_t offset) {
+     return false;
+   }
+ 
++#ifdef CHIMERA_NOFILEMAP
++  char magic[20];
++  return ReadImage(offset, magic, sizeof(magic)) &&
++         std::memcmp(magic, "MICROSOFT*XBOX*MEDIA", 20) == 0;
++#else
+   // Simple check to see if the given offset contains the magic value.
+   return std::memcmp(state->ptr + offset, "MICROSOFT*XBOX*MEDIA", 20) == 0;
++#endif
+ }
+ 
+ DiscImageDevice::Error DiscImageDevice::ReadAllEntries(
+@@ -171,8 +242,19 @@ bool DiscImageDevice::ReadEntry(ParseState* state, const uint8_t* buffer,
+         return false;
+       }
+       // Read child list.
++#ifdef CHIMERA_NOFILEMAP
++      const size_t folder_offset =
++          state->game_offset + (sector * kXESectorSize);
++      std::vector<uint8_t> folder(xe::round_up(length, size_t(kXESectorSize)));
++      if (!ReadImage(folder_offset, folder.data(),
++                     std::min(folder.size(), image_size_ - folder_offset))) {
++        return false;
++      }
++      uint8_t* folder_ptr = folder.data();
++#else
+       uint8_t* folder_ptr =
+           state->ptr + state->game_offset + (sector * kXESectorSize);
++#endif
+       if (!ReadEntry(state, folder_ptr, 0, entry.get())) {
+         return false;
+       }
+diff --git a/src/xenia/vfs/devices/disc_image_device.h b/src/xenia/vfs/devices/disc_image_device.h
+index 3b098944c..33d91b75e 100644
+--- a/src/xenia/vfs/devices/disc_image_device.h
++++ b/src/xenia/vfs/devices/disc_image_device.h
+@@ -10,6 +10,7 @@
+ #ifndef XENIA_VFS_DEVICES_DISC_IMAGE_DEVICE_H_
+ #define XENIA_VFS_DEVICES_DISC_IMAGE_DEVICE_H_
+ 
++#include <cstdio>
+ #include <memory>
+ #include <string>
+ 
+@@ -38,9 +39,21 @@ class DiscImageDevice : public Device {
+   uint32_t component_name_max_length() const override { return 255; }
+ 
+   uint32_t total_allocation_units() const override {
++#ifdef CHIMERA_NOFILEMAP
++    return uint32_t(image_size_ / sectors_per_allocation_unit() /
++                    bytes_per_sector());
++#else
+     return uint32_t(mmap_->size() / sectors_per_allocation_unit() /
+                     bytes_per_sector());
++#endif
+   }
++#ifdef CHIMERA_NOFILEMAP
++  // chimera: the image is a file that is read. Upstream maps all of it and
++  // follows pointers; a guest cannot map a file, and gigabytes of a disc do
++  // not belong in the machine's memory.
++  bool ReadImage(size_t offset, void* buffer, size_t length);
++  size_t image_size() const { return image_size_; }
++#endif
+   uint32_t available_allocation_units() const override { return 0; }
+   uint32_t sectors_per_allocation_unit() const override { return 1; }
+   uint32_t bytes_per_sector() const override { return 0x200; }
+@@ -58,6 +71,10 @@ class DiscImageDevice : public Device {
+   std::filesystem::path host_path_;
+   std::unique_ptr<Entry> root_entry_;
+   std::unique_ptr<MappedMemory> mmap_;
++#ifdef CHIMERA_NOFILEMAP
++  FILE* image_ = nullptr;
++  size_t image_size_ = 0;
++#endif
+ 
+   typedef struct {
+     uint8_t* ptr;
+diff --git a/src/xenia/vfs/devices/disc_image_entry.cc b/src/xenia/vfs/devices/disc_image_entry.cc
+index 7c71c2f70..2be8e709b 100644
+--- a/src/xenia/vfs/devices/disc_image_entry.cc
++++ b/src/xenia/vfs/devices/disc_image_entry.cc
+@@ -7,6 +7,8 @@
+  ******************************************************************************
+  */
+ 
++#include <vector>
++#include "xenia/vfs/devices/disc_image_device.h"
+ #include "xenia/vfs/devices/disc_image_entry.h"
+ 
+ #include "xenia/base/math.h"
+@@ -46,7 +48,28 @@ std::unique_ptr<MappedMemory> DiscImageEntry::OpenMapped(
+ 
+   size_t real_offset = data_offset_ + offset;
+   size_t real_length = length ? std::min(length, data_size_) : data_size_;
++#ifdef CHIMERA_NOFILEMAP
++  // chimera: "mapped" is read into memory that goes when the mapping does.
++  // What asks for this is a program being loaded, which is copied out of it.
++  class ReadMemory final : public MappedMemory {
++   public:
++    explicit ReadMemory(size_t size) : bytes_(size) {
++      data_ = bytes_.data();
++      size_ = bytes_.size();
++    }
++
++   private:
++    std::vector<uint8_t> bytes_;
++  };
++  auto memory = std::make_unique<ReadMemory>(real_length);
++  if (!static_cast<DiscImageDevice*>(device_)->ReadImage(
++          real_offset, memory->data(), real_length)) {
++    return nullptr;
++  }
++  return memory;
++#else
+   return mmap_->Slice(real_offset, real_length);
++#endif
+ }
+ 
+ bool DiscImageEntry::DeleteEntryInternal(Entry* entry) { return false; }
+diff --git a/src/xenia/vfs/devices/disc_image_file.cc b/src/xenia/vfs/devices/disc_image_file.cc
+index d1db59d68..d7208070b 100644
+--- a/src/xenia/vfs/devices/disc_image_file.cc
++++ b/src/xenia/vfs/devices/disc_image_file.cc
+@@ -7,6 +7,7 @@
+  ******************************************************************************
+  */
+ 
++#include "xenia/vfs/devices/disc_image_device.h"
+ #include "xenia/vfs/devices/disc_image_file.h"
+ 
+ #include "xenia/base/logging.h"
+@@ -27,6 +28,24 @@ X_STATUS DiscImageFile::ReadSync(std::span<uint8_t> buffer, size_t byte_offset,
+     return X_STATUS_END_OF_FILE;
+   }
+ 
++#ifdef CHIMERA_NOFILEMAP
++  // chimera: read from the image, which is not mapped
++  {
++    auto* device = static_cast<DiscImageDevice*>(entry_->device());
++    if (entry_->data_offset() >= device->image_size()) {
++      xe::FatalError("This ISO image is corrupted and cannot be played.");
++      return X_STATUS_END_OF_FILE;
++    }
++    const size_t real_offset = entry_->data_offset() + byte_offset;
++    const size_t real_length =
++        std::min(buffer.size(), entry_->data_size() - byte_offset);
++    if (!device->ReadImage(real_offset, buffer.data(), real_length)) {
++      return X_STATUS_END_OF_FILE;
++    }
++    *out_bytes_read = real_length;
++    return X_STATUS_SUCCESS;
++  }
++#endif
+   if (entry_->data_offset() >= entry_->mmap()->size()) {
+     xe::FatalError("This ISO image is corrupted and cannot be played.");
+     return X_STATUS_END_OF_FILE;

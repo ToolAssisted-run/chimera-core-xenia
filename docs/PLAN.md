@@ -10,8 +10,13 @@ Vulkan bridge for Chimera is something I wanted us to do anyway."
 "A fair try" is taken to mean what it says: this may not work, and where it
 does not this file will say so.
 
-Nothing here runs a game yet. This file is the survey, the route, and what
-has been built so far.
+Where it stands (2026-10-10): the owner's one game runs in the sandbox, a
+frame at a time, to the same memory, sound and schedule as the native build,
+and draws through miniBox's Vulkan bridge the pictures the native build
+draws. What it cannot do yet is load a state with the Vulkan renderer (the
+renderer does not rebuild itself on a new device), and it is not a package
+the frontend can open. This file is the survey, the route, and what each
+step measured.
 
 ## The pin
 
@@ -78,9 +83,15 @@ exist.
 - **M1 - virtual time.** DONE 2026-10-10 on the native build, for the one
   game there is and thirty seconds of it (below): a scheduler behind
   `xe::threading`, a charge per block in the x64 emitter, the clock from it.
-- **M2 - the guest build.** The JIT's tables and the memory views.
-- **M3 - savestates, input, lag.**
-- **M4 - the picture**, through the Vulkan bridge.
+- **M2 - the guest build.** DONE 2026-10-10 (below): the memory in one
+  block, the recompiler from the memory base, and the game and upstream's
+  instruction tests in the sandbox with the native build's results.
+- **M3 - savestates, input, lag.** DONE 2026-10-10 (below), with no
+  picture: the core's exports, a frame, pads, sound, and states that are the
+  whole machine.
+- **M4 - the picture**, through the Vulkan bridge. HALF DONE 2026-10-10
+  (below): it draws in the sandbox what it draws natively. A load with this
+  renderer is not done.
 - **M5 - the package and the frontend.**
 
 ## M0: the build (2026-10-10)
@@ -370,6 +381,249 @@ and a sandbox are done on the native build, where each could be compared
 with what it replaced: the memory, the registers, the recompiler's own
 addresses. What is left of M2 is the sandbox itself.
 
+## M2: in the sandbox (2026-10-10)
+
+`waterbox/build-guest.sh -m <miniBox>` builds Xenia with miniBox's guest
+toolchain and links two programs: `build/wbx/ppc-tests.wbx`, upstream's
+instruction tests behind one exported call, and the core. Each has a host
+runner beside it (`run-ppc-wbx`, `run-wbx`).
+
+What a guest needed that the native build had from the host:
+
+- **A handful of system calls answered in the guest**
+  (`waterbox/guest/guest-libc.cc`). miniBox ends a guest that makes a call it
+  does not know, and the first one was `getcwd`. The working directory is
+  "/", making a directory or removing a file fails as on a read-only disk,
+  the processor affinity and the scheduling calls succeed and do nothing, and
+  the kernel's random bytes are a fixed stream.
+- **No Vulkan device for the renderer that draws nothing.** Upstream's
+  "null" graphics system makes a Vulkan provider anyway; with
+  `CHIMERA_HEADLESS` it does not.
+- **A disc image that is read, not mapped** (patch 0008,
+  `CHIMERA_NOFILEMAP`). Upstream maps the whole image; a guest has anonymous
+  memory only, and the image is 7.3 GiB. The device now seeks and reads.
+- **No directories.** The emulator's roots are names nothing is under, its
+  per-game cache of instruction facts is off (it would also make a run
+  depend on the runs before it), and nothing is created at start.
+
+**The game.** Mirror's Edge, null renderer, native build against sandbox,
+each a new process:
+
+| the machine's time | baton handed over | frames | 512 MiB of RAM | host seconds, native / sandbox |
+| --- | --- | --- | --- | --- |
+| 5 s | 258,326 | 437 | ed611adef65dbf20, both | 12, both at once |
+| 30 s | 1,783,398 | 2,681 | ea99a588e538d7ee, both | 185, both at once |
+
+The sandbox is not slower than the native build.
+
+**The compiler is part of the machine.** The first thirty-second comparison
+failed: the same schedule and the same frames, and one MiB of the console's
+memory (physical 0x135xxxxx) different in single bytes, ff in one run and 00
+in the other. The native build was clang's and the guest is GCC's; a native
+build made with GCC 14 ends with the sandbox's memory exactly (at fifteen
+seconds c9904a6bbb738513, where clang's build has 3ffdad3712978627). At five
+and ten seconds all three agree, which is why the GCC section above could say
+they did. So `build-native.sh` builds the reference with GCC, the guest's
+compiler, and the earlier tables in this file that say 489c3a26d743dc0b for
+thirty seconds are clang's. WHICH code the two compilers disagree on is not
+found. The bytes look like packed vertex data, which points at a conversion
+from floating point to integer in one of the emulator's own helpers whose
+result for an out-of-range value the language leaves open. It matters beyond
+tidiness: a core built by another compiler version could be another machine,
+and nothing here would notice before a movie desynchronised.
+
+**The instruction tests.** A new recompiler is made for every test, and in
+the sandbox that is slow: the whole set takes half an hour where the native
+runner takes four minutes with a process per test, or one minute in one
+process. Most of that is miniBox finding room for each recompiler's large
+allocations by scanning its page table; it is not the recompiled code.
+
+The first whole run failed 28,321 tests, the reference's 28,320 and
+`stdcx_fail`. That one is not the sandbox: the test reads three bytes more
+of the scratch memory at 0x10001000 than it writes, upstream runs each test
+in a new process where that memory is zero, and in one process it holds what
+the test before left - and "the test before" depends on the order the
+directory is listed in. The runner now clears the scratch range before every
+test (patch 0005).
+
+With that, the whole set in the sandbox: **170,417 tests, 142,097 pass and
+28,320 fail, the reference's 28,320 by name** (the names' SHA-256 begins
+d1195e69efa280d0, as natively), in 29 minutes. The reference itself was made
+again with the GCC build, forked and in one process under the scheduler, and
+is the same set both ways.
+
+## M3: a frame, a pad, a state (2026-10-10)
+
+`waterbox/driver` is the machine behind the exports the frontend calls
+(`wbx-entry.cc`: `Init`, `FrameAdvance`, `SetAxis`, the picture, the sound,
+`InputWasRead`, a memory domain and a bus). The same two files are the native
+reference (`build/vsched/bin/Linux/run-frames`) and the core
+(`build/wbx/core.wbx`, run by `build/wbx/run-wbx`), and one harness
+(`waterbox/gate-harness.h`) drives both, so the two runs are asked the same
+things in the same order.
+
+- **The frame** is a sixtieth of a second of the machine's time, counted
+  from when it was switched on: frame k ends two microseconds after
+  k/60 s. The vertical blank is raised on the same count (the thread that
+  raises it upstream paces itself from wherever it first woke; under the
+  scheduler it sleeps to the next multiple instead), so the frontend's frame
+  and the console's cannot drift apart.
+- **The pads** are a driver that answers with what the frontend set: four
+  ports, the console's own sixteen-bit button word for each (sixteen bits a
+  port in the frontend's 64) and six axes (the triggers, then each stick's x
+  and y). Keystrokes - the other way a program reads a pad - are made from
+  the same state by upstream's rules, with the repeat on the machine's
+  clock. A frame in which the program asked for a pad says so, which is what
+  the frontend's lag counter is made of.
+- **The sound** is what the program hands the console's output: 256 samples
+  of six channels at 48 kHz, mixed down to stereo as upstream's drivers do
+  it, and taken by the frame. Nothing is ever waiting to be played, so the
+  program is never held back by sound. The media player's output (music
+  from the dashboard's library) is heard by nobody.
+- **The bus** is the console's 4 GiB address space. There is no memory
+  domain: see "an observer could hang the machine" under M4.
+
+Measured, Mirror's Edge, 300 frames (five seconds), a digest at every
+sixtieth - time, handings over, the GPU's counter, frames in which a pad was
+asked for, the sound so far, the 512 MiB:
+
+| run | what it ended with |
+| --- | --- |
+| native, twice | 258,708 handings over, a pad asked for in 173 frames, 238,592 sample pairs (c241628de0ac8e6c), RAM 64bc985a2c3c692b - the same lines both times |
+| in the sandbox | the same lines; seven host seconds |
+| A held for ten frames from frame 150, native and sandbox | 258,706, and 247 ns earlier - another run, the same one in both |
+| a state saved and loaded before every frame (sandbox) | the lines of the run that was never stopped |
+| a state saved after frame 155 by one process (359 MB), loaded by another | ends where the unbroken run ends |
+
+States needed nothing written for them: every thread of the machine is a
+thread of the guest, parked in the scheduler when a frame ends, and miniBox
+keeps the guest's threads with its memory.
+
+What the pad leg does and does not show. The program is seen to be handed
+the pad (a trace of the driver's answers, taken once by hand, has the button
+and the stick in every poll of the ten frames), and the run with a button is
+another run. But the game does nothing with a pad in its first ten seconds:
+its memory at the end is the memory of the run without (ten seconds with A
+pressed every half second: 44 more handings over, the same 512 MiB). A leg
+in which the game ACTS on input needs a run that reaches its menu, which is
+past where anything here has run.
+
+## M4: the picture, through the bridge (2026-10-10)
+
+Xenia's Vulkan renderer needed three things to draw with no window, and one
+more to draw in the sandbox.
+
+- **A presenter with nothing to present to.** Upstream makes its presenter
+  only for a window, though the presenter's image of what the console shows
+  does not need one (upstream says so in a comment, "for offscreen use").
+  With `CHIMERA_HEADLESS` the emulator asks for presentation, and the
+  provider makes its instance and device with no surface, no swapchain and
+  no queue that can present.
+- **The picture read back** by the frame (`waterbox/driver`): when a frame
+  ends, the presenter copies its image out through the device, and that is
+  what `GetVideoBgra` hands the frontend - 1280x720 here. `SetRenderingEnabled`
+  off skips the copy and nothing else.
+- **The loader is the bridge** (patch 0009): in a guest there is no library
+  to load, and `vkGetInstanceProcAddr` comes from the bridge's guest half
+  (`chimera_vk_lookup`). `build-guest.sh` generates both halves from the
+  registry miniBox carries; the guest's is an archive of the core, the
+  host's is compiled into `run-wbx`, which hands the bridge over before
+  `Init` (`SetVulkanBridge`).
+- **A watched page** (patch 0006). The renderer's caches protect pages of
+  the console's memory to hear of writes to them, and natively the fault
+  arrives in a signal handler. A guest is handed the address and whether it
+  was a write (`GuestFaultHandler`), which is all that path needs once the
+  device registers are found by address.
+
+The first run through the bridge ended with one call refused: the version
+query a renderer makes before it has an instance, which the host half could
+not answer until an instance existed, so Xenia took the device for Vulkan
+1.0. Fixed in miniBox (vk-bridge 710768f), with a test that fails without it.
+
+**Measured**, Mirror's Edge, 300 frames, llvmpipe (Mesa 25.2.8), a digest at
+every sixtieth frame:
+
+| run | result |
+| --- | --- |
+| native, Vulkan, three times | the same lines, pictures included |
+| sandbox, through the bridge, twice | the same lines as each other and as the native run: schedule, sound, memory and every picture (frame 300 is bc114f4003fc0030, the publisher's logo, and the file written out is the native run's file byte for byte); no call refused; 12 host seconds |
+| either, against the renderer that draws nothing | the same 512 MiB at every sixtieth frame; the schedule differs by a few handings over |
+
+So the machine does not depend on what draws it, as the survey expected: by
+default nothing the GPU draws is read back into the console's memory.
+
+**Two things found on the way that were not the renderer's.**
+
+*An observer could hang the machine.* The gate's digest read the console's
+512 MiB from outside, and with one block that is not safe: a page the
+program has closed (decommitted, or protected against itself) faults for a
+reader as it would for the program, and the fault was answered "handled"
+with nothing changed - for ever. It first showed as a per-frame digest that
+never reached frame 3. There is now an observer's way in
+(`MMIOHandler::BeginObserving`): between the two calls a closed page that
+faults on a read is opened, and closed again at the end, and nobody in the
+machine is told. The digest and the bus use it, and the core has NO memory
+domain - a tool reading a pointer from outside would meet the same fault -
+only the bus. The gate reads the bus at six awkward places at every digest
+(nothing at all, the program, the GPU's registers, physical memory, a
+megabyte near the top, the last page).
+
+*A thread the sandbox could not have.* With the Vulkan renderer the native
+run and the sandboxed one differed by a few handings over from the first
+frame. A trace of every handing over (`--trace-schedule`) put the first
+difference on line 14: a thread named "Shader Storage Writer", which
+upstream starts to write the game's shaders beside its cache for the next
+run, and which a guest with nowhere to write never starts. The store is off
+(`store_shaders`): it would also have made a run depend on the runs before.
+
+**Not done, and it is the larger half.** A load. The bridge makes every
+load a new device, and upstream answers a lost device with a fatal error
+(its own comment lists what would have to be reset, as a TODO). What a state
+must carry that it does not: the console's render targets (the EDRAM lives
+on the device; upstream can dump it and restore it for trace playback, in
+its Direct3D renderer only), and what the GPU wrote into memory by
+resolving (kept on the device unless `readback_resolve` is on). What must
+happen after a load: the command processor's context taken down and made
+again on the new device, at a moment when its thread is between packets,
+and the shaders in use loaded again. Until then the state legs of the gate
+are the renderer that draws nothing.
+
+Also not done: the frontend's side (an engine export to hand the bridge
+over, as `SetGpuBridge` is for OpenGL - a change to what Chimera is, so the
+owner's), a real card (the GTX 1060 is on the Windows side, and the gate's
+runner is Linux-only), and a second game.
+
+## The gate (2026-10-10)
+
+`waterbox/run-gate.sh`, 7 legs, four minutes: two native runs are one run
+and a run with another instruction cost is another; the sandbox is the
+native run at every sixtieth frame; a button makes another run, the same in
+both; a state saved and loaded before each of 300 frames is the run that
+was never stopped; a state saved by one process is carried on by another;
+300 frames drawn through the bridge are the 300 drawn without it; and
+every eighteenth file of upstream's instruction tests fails, in the
+sandbox, what the reference fails.
+
+Each leg has been seen to fail, by hand, once:
+
+- the instruction cost and the button are in the gate itself (a run that
+  must differ);
+- a state that is not this moment's (`HARNESS_BREAK_STALE_STATE`: half way,
+  the state loaded is the one from the frame before): the run ends 16.7 ms
+  behind with other memory;
+- a bridge whose flush writes nothing (miniBox's `VKB_TEST_BREAK_FLUSH`
+  built into the runner): every picture is the blank one, and the machine
+  is untouched;
+- one failing test taken out of the reference (`XENIA_PPC_REFERENCE`): "1039
+  fail, the reference says 1038", and the test is named;
+- a part of the instruction tests in which nothing fails is refused, which
+  the first choice of part (every twentieth file) was.
+
+Not controlled: the sandbox leg against a sandbox that is subtly another
+machine. What stands in for it is that it did fail, for real, three times
+on the way here - a clang-built reference, a test order, a thread the guest
+could not have - and each time named the frame.
+
 ## The recompiler's own tests (2026-10-10)
 
 Upstream has 570 files of PowerPC instruction tests
@@ -420,7 +674,9 @@ the only features that change a result; the rest only change the code.
 
 ## What is the owner's
 
-- **Content.** There is no Xbox 360 game on the development machine. Nothing
-  past M0's build can be proved without one.
+- **Content.** One game, the owner's disc image of Mirror's Edge, outside
+  the repository (`tests/roms`, ignored). Every game leg of the gate needs
+  it and is skipped without it; what is proved is proved on that one game's
+  first thirty seconds.
 - **The repository.** Local only. A public repository is the owner's to ask
   for.

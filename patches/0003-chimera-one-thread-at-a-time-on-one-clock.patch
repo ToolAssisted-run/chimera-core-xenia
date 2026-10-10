@@ -282,10 +282,10 @@ index 000000000..563a386a3
 +#endif  // XENIA_BASE_CHIMERA_SYNC_H_
 diff --git a/src/xenia/base/chimera_vsched.h b/src/xenia/base/chimera_vsched.h
 new file mode 100644
-index 000000000..4639abe70
+index 000000000..8cffead15
 --- /dev/null
 +++ b/src/xenia/base/chimera_vsched.h
-@@ -0,0 +1,58 @@
+@@ -0,0 +1,75 @@
 +// chimera: the one clock, and what moves it (threading_chimera.cc).
 +#ifndef XENIA_BASE_CHIMERA_VSCHED_H_
 +#define XENIA_BASE_CHIMERA_VSCHED_H_
@@ -328,6 +328,23 @@ index 000000000..4639abe70
 +
 +// How many times the baton has been handed over.
 +uint64_t Switches();
++
++// For finding where two runs part: every time a thread gives the baton up -
++// which one, how, when - on standard error.
++extern bool g_trace_schedule;
++
++// The frame's cadence: frame k ends k/60 s after the machine was switched on,
++// to the nanosecond below. The vertical blank is raised on it and the
++// frontend's frame ends just after it, so the two cannot drift apart.
++inline int64_t FrameBoundaryNs(int64_t k) { return k * 1000000000ll / 60; }
++// The first boundary after a moment.
++inline int64_t NextFrameBoundaryNs(int64_t now) {
++  int64_t k = now * 60 / 1000000000ll;
++  while (FrameBoundaryNs(k) <= now) {
++    k++;
++  }
++  return FrameBoundaryNs(k);
++}
 +
 +// The machine's time as a moment on the steady clock's scale: what everything
 +// that asked the host "what time is it" asks instead.
@@ -723,10 +740,10 @@ index a0cae20e2..029311833 100644
  
 diff --git a/src/xenia/base/threading_chimera.cc b/src/xenia/base/threading_chimera.cc
 new file mode 100644
-index 000000000..8e27b118c
+index 000000000..2e3156a6c
 --- /dev/null
 +++ b/src/xenia/base/threading_chimera.cc
-@@ -0,0 +1,959 @@
+@@ -0,0 +1,968 @@
 +// chimera: the threading layer on one clock.
 +//
 +// Upstream's threads are the host's, and time is the host's. Here every
@@ -1005,6 +1022,10 @@ index 000000000..8e27b118c
 +void YieldNow(VThread* self) {
 +  Account();
 +  S().now += kYieldCostNs;
++  if (xe::chimera::g_trace_schedule) {
++    std::fprintf(stderr, "sched %u yield %lld %s\n", self->id,
++                 static_cast<long long>(S().now), self->name.c_str());
++  }
 +  SwitchTo(self, PickNext(self));
 +}
 +
@@ -1015,6 +1036,10 @@ index 000000000..8e27b118c
 +  auto& s = S();
 +  Account();
 +  s.now += kYieldCostNs;
++  if (xe::chimera::g_trace_schedule) {
++    std::fprintf(stderr, "sched %u block%zu %lld %s\n", self->id, count,
++                 static_cast<long long>(s.now), self->name.c_str());
++  }
 +  self->waits.assign(waits, waits + count);
 +  self->wait_all = wait_all;
 +  self->alertable = alertable;
@@ -1636,6 +1661,7 @@ index 000000000..8e27b118c
 +namespace chimera {
 +
 +int64_t g_instruction_budget = threading::kSliceInstructions;
++bool g_trace_schedule = false;
 +
 +uint64_t BudgetSpent(void*) {
 +  threading::YieldNow(threading::Self());
@@ -1963,7 +1989,7 @@ index 29c885add..1444a5d3d 100644
    }
  };
 diff --git a/src/xenia/gpu/graphics_system.cc b/src/xenia/gpu/graphics_system.cc
-index f4f4a157d..ca0560fed 100644
+index f4f4a157d..e90c66875 100644
 --- a/src/xenia/gpu/graphics_system.cc
 +++ b/src/xenia/gpu/graphics_system.cc
 @@ -7,6 +7,7 @@
@@ -1974,7 +2000,27 @@ index f4f4a157d..ca0560fed 100644
  #include "xenia/gpu/graphics_system.h"
  
  #include "xenia/base/byte_stream.h"
-@@ -208,7 +209,7 @@ X_STATUS GraphicsSystem::Setup(cpu::Processor* processor,
+@@ -188,7 +189,18 @@ X_STATUS GraphicsSystem::Setup(cpu::Processor* processor,
+                 }
+               }
+ #endif
+-#if XE_PLATFORM_LINUX
++#if defined(CHIMERA_VSCHED)
++              // chimera: the vertical blank is on the frame's cadence, sixty
++              // a second of the machine's time counted from when it was
++              // switched on. None is late, so none is made up, and neither
++              // setting above is asked.
++              MarkVblank();
++              (void)duration_scalar;
++              (void)vsync_duration_d;
++              (void)last_frame_time;
++              xe::chimera::SleepUntil(xe::chimera::NextFrameBoundaryNs(
++                  xe::chimera::VirtualNanoseconds()));
++#elif XE_PLATFORM_LINUX
+               MarkVblank();
+ 
+               if (cvars::vsync || normalized_framerate_limit > 0) {
+@@ -208,7 +220,7 @@ X_STATUS GraphicsSystem::Setup(cpu::Processor* processor,
                      1, static_cast<int64_t>(
                             static_cast<double>(sleep_duration_ns) /
                             Clock::guest_time_scalar())));

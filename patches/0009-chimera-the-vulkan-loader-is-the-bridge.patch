@@ -1,0 +1,42 @@
+diff --git a/src/xenia/ui/vulkan/vulkan_instance.cc b/src/xenia/ui/vulkan/vulkan_instance.cc
+index 7584e1e1f..f28ea5f5b 100644
+--- a/src/xenia/ui/vulkan/vulkan_instance.cc
++++ b/src/xenia/ui/vulkan/vulkan_instance.cc
+@@ -20,6 +20,10 @@
+ #include "xenia/base/platform.h"
+ #include "xenia/ui/vulkan/vulkan_presenter.h"
+ 
++#if defined(CHIMERA_GUEST)
++extern "C" void* chimera_vk_lookup(const char* name);
++#endif
++
+ #if XE_PLATFORM_LINUX
+ #include <dlfcn.h>
+ #elif XE_PLATFORM_WIN32
+@@ -49,7 +53,14 @@ std::unique_ptr<VulkanInstance> VulkanInstance::Create(
+   Functions& ifn = vulkan_instance->functions_;
+ 
+   bool functions_loaded = true;
+-#if XE_PLATFORM_LINUX
++#if defined(CHIMERA_GUEST)
++  // chimera: in the sandbox there is no library to load. The loader is the
++  // Vulkan bridge's guest half (miniBox, source/vk), which answers for a
++  // name with its wrapper for that command, or with nothing.
++#define XE_VULKAN_LOAD_LOADER_FUNCTION(name) \
++  functions_loaded &=                        \
++      (ifn.name = PFN_##name(chimera_vk_lookup(#name))) != nullptr;
++#elif XE_PLATFORM_LINUX
+ #if XE_PLATFORM_ANDROID
+   const char* const loader_library_name = "libvulkan.so";
+ #else
+@@ -540,7 +551,9 @@ VulkanInstance::~VulkanInstance() {
+     functions_.vkDestroyInstance(instance_, nullptr);
+   }
+ 
+-#if XE_PLATFORM_LINUX
++#if defined(CHIMERA_GUEST)
++  // chimera: nothing was loaded
++#elif XE_PLATFORM_LINUX
+   if (loader_) {
+     dlclose(loader_);
+   }

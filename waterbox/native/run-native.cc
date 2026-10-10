@@ -11,13 +11,13 @@
 #include <filesystem>
 #include <thread>
 
+#include "../driver/machine_settings.h"
+
 #include "xenia/apu/nop/nop_audio_system.h"
 #include "xenia/base/chimera_vsched.h"
 #include "xenia/base/console_app_main.h"
 #include "xenia/base/cvar.h"
 #include "xenia/base/logging.h"
-#include "xenia/base/platform_amd64.h"
-#include "xenia/cpu/backend/x64/x64_backend.h"
 #include "xenia/emulator.h"
 #include "xenia/gpu/command_processor.h"
 #include "xenia/gpu/graphics_system.h"
@@ -25,16 +25,14 @@
 #include "xenia/gpu/vulkan/vulkan_graphics_system.h"
 #include "xenia/hid/input_system.h"
 #include "xenia/hid/nop/nop_hid.h"
-#include "xenia/kernel/kernel_flags.h"
 #include "xenia/memory.h"
-
-// declared where they are defined, in sources with no header for them
-DECLARE_bool(emit_inline_mmio_checks);
 
 DEFINE_transient_path(target, "", "The program to run.", "Chimera");
 DEFINE_transient_string(renderer, "null", "null or vulkan.", "Chimera");
 DEFINE_transient_string(seconds, "10", "How long to run, on the host's clock.", "Chimera");
 DEFINE_transient_path(work, "work-native", "Where the emulator keeps what it writes.", "Chimera");
+DEFINE_transient_bool(ram_blocks, false, "Print a hash for each MiB of RAM.", "Chimera");
+DEFINE_transient_string(ram_hex, "", "Print RAM as hex: <physical address>:<bytes>, both hex.", "Chimera");
 
 namespace {
 
@@ -56,33 +54,24 @@ int RunNative(const std::vector<std::string>& args) {
   // that never comes. The first thing to log is the Vulkan loader.
   xe::InitializeLogging("run-native");
 
-  // The kernel's own switch for "nobody is there to answer a dialog".
-  cvars::headless = true;
-
-  // What the recompiler may use of the host's processor is one value on every
-  // machine: AVX2 and FMA, and nothing else it knows of (user-decided,
-  // 2026-10-10). It emits different code with different features and the
-  // results differ - a fused multiply-add rounds once, two steps round twice -
-  // so a host without both cannot run the same machine, and is refused.
-  cvars::x64_extension_mask = xe::amd64::kX64EmitAVX2 | xe::amd64::kX64EmitFMA;
-
-  // The console's device registers are found by looking at the address of a
-  // 32-bit load or store, and not by letting it fault and reading the
-  // processor's state in a signal handler: a guest gets no such state.
-  // Upstream has both; this is its other one.
-  cvars::emit_inline_mmio_checks = true;
+  // the settings that make it one machine on every host
   {
-    const uint64_t have = xe::amd64::GetFeatureFlags();
-    const uint64_t need = xe::amd64::kX64EmitAVX2 | xe::amd64::kX64EmitFMA;
-    if ((have & need) != need) {
-      std::fprintf(stderr, "run-native: this processor has no AVX2 or no FMA, and the core needs both\n");
+    std::string why;
+    if (!chimera_xenia::apply_machine_settings(why)) {
+      std::fprintf(stderr, "run-native: %s\n", why.c_str());
       return 1;
     }
   }
 
+#ifdef CHIMERA_GUEST
+  // A guest has the files it was given and no directories to make: the
+  // emulator's roots are names nothing is under.
+  const std::filesystem::path work = cvars::work;
+#else
   const std::filesystem::path work = std::filesystem::absolute(cvars::work);
   std::filesystem::create_directories(work / "content");
   std::filesystem::create_directories(work / "cache");
+#endif
 
   auto emulator = std::make_unique<xe::Emulator>("", work, work / "content", work / "cache");
   const bool vulkan = cvars::renderer == "vulkan";
@@ -112,7 +101,11 @@ int RunNative(const std::vector<std::string>& args) {
                  name.data());
   });
 
+#ifdef CHIMERA_GUEST
+  status = emulator->LaunchPath(cvars::target);
+#else
   status = emulator->LaunchPath(std::filesystem::absolute(cvars::target));
+#endif
   if (XFAILED(status)) {
     std::fprintf(stderr, "run-native: the program did not launch (%08X)\n", status);
     return 1;
@@ -144,12 +137,40 @@ int RunNative(const std::vector<std::string>& args) {
   // The console's 512 MiB, as the machine sees them. Read while the guest
   // runs, so this is a sign of life and not yet a digest to compare.
   std::printf("ramHash=%016" PRIx64 "\n", Fnv(emulator->memory()->physical_membase(), 0x20000000));
+  // For finding where two runs' memory differs: a hash a MiB, then the bytes.
+  if (cvars::ram_blocks) {
+    for (uint32_t mib = 0; mib < 512; mib++) {
+      std::printf("ramBlock[%03x]=%016" PRIx64 "\n", mib,
+                  Fnv(emulator->memory()->physical_membase() + (size_t(mib) << 20), 1 << 20));
+    }
+  }
+  if (!cvars::ram_hex.empty()) {
+    unsigned long address = 0, length = 0;
+    if (std::sscanf(cvars::ram_hex.c_str(), "%lx:%lx", &address, &length) == 2 && address < 0x20000000 &&
+        length <= 0x20000000 - address) {
+      const uint8_t* p = emulator->memory()->physical_membase() + address;
+      for (unsigned long i = 0; i < length; i += 32) {
+        std::printf("ram[%08lx]=", address + i);
+        for (unsigned long k = i; k < i + 32 && k < length; k++) {
+          std::printf("%02x", p[k]);
+        }
+        std::printf("\n");
+      }
+    }
+  }
   std::fflush(stdout);
   std::fflush(stderr);
   xe::ShutdownLogging();
+#ifdef CHIMERA_GUEST
+  // In the sandbox the call returns; the machine's other threads stay where
+  // the scheduler left them. The emulator is not taken apart.
+  (void)emulator.release();
+  return 0;
+#else
   // The guest's threads are the host's and are still running: leaving is the
   // process ending, not the emulator being taken apart.
   std::_Exit(0);
+#endif
 }
 
 }  // namespace

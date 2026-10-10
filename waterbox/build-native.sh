@@ -5,9 +5,13 @@
 #
 #   waterbox/build-native.sh [-j <jobs>]
 #
-# Needs: clang 20 (CC and CXX may name another), cmake 3.20+, ninja, python3,
-# and gcc for the shader tools. Nothing is installed and nothing outside this
-# checkout is written.
+# Needs: gcc (CC and CXX may name another), cmake 3.20+, ninja, python3.
+# Nothing is installed and nothing outside this checkout is written.
+#
+# The compiler is the one a guest is built with, on purpose: the same game
+# run by a clang build and by a gcc build ends with a few bytes of the
+# console's memory different (docs/PLAN.md), so a reference built with
+# another compiler than the guest's is a reference for something else.
 set -eu
 here="$(cd "$(dirname "$0")" && pwd)"
 root="$(cd "$here/.." && pwd)"
@@ -65,9 +69,9 @@ for tree in native vsched; do
 	dir="$root/build/$tree"
 	mkdir -p "$dir"
 	flags="-DCHIMERA_HEADLESS=ON -DXENIA_BUILD_TESTS=ON"
-	[ "$tree" = vsched ] && flags="-DCHIMERA_HEADLESS=ON -DCHIMERA_VSCHED=ON -DCHIMERA_FLATMEM=ON -DXENIA_BUILD_TESTS=ON"
+	[ "$tree" = vsched ] && flags="-DCHIMERA_HEADLESS=ON -DCHIMERA_VSCHED=ON -DCHIMERA_FLATMEM=ON -DCHIMERA_NOFILEMAP=ON -DXENIA_BUILD_TESTS=ON"
 	# shellcheck disable=SC2086
-	CC="${CC:-clang-20}" CXX="${CXX:-clang++-20}" cmake -S "$xenia" -B "$dir" -G Ninja \
+	CC="${CC:-gcc}" CXX="${CXX:-g++}" cmake -S "$xenia" -B "$dir" -G Ninja \
 		-DCMAKE_BUILD_TYPE=Release $flags -DCHIMERA_DRIVER_DIR="$here/native" \
 		> "$root/build/configure-$tree.log" 2>&1
 

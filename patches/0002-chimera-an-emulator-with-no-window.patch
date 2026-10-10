@@ -1,5 +1,5 @@
 diff --git a/src/xenia/emulator.cc b/src/xenia/emulator.cc
-index eadd15ccf..4c379dc98 100644
+index eadd15ccf..81797f232 100644
 --- a/src/xenia/emulator.cc
 +++ b/src/xenia/emulator.cc
 @@ -300,7 +300,10 @@ X_STATUS Emulator::Setup(
@@ -14,7 +14,24 @@ index eadd15ccf..4c379dc98 100644
  
    XELOGI("{}: Initializing VFS...", __func__);
    // Bring up the virtual filesystem used by the kernel.
-@@ -841,8 +844,10 @@ X_STATUS Emulator::DataMigration(const uint64_t xuid) {
+@@ -327,10 +330,16 @@ X_STATUS Emulator::Setup(
+ 
+   XELOGI("{}: Starting graphics_system...", __func__);
+   // Setup the core components.
++  // chimera: with no window the picture is still wanted - it is read back
++  // from the presenter's image (a renderer with no device makes no presenter)
+   result = graphics_system_->Setup(
+       processor_.get(), kernel_state_.get(),
+       display_window_ ? &display_window_->app_context() : nullptr,
++#ifdef CHIMERA_HEADLESS
++      true);
++#else
+       display_window_ != nullptr);
++#endif
+   if (result) {
+     XELOGE("{}: Failed to setup graphics_system!", __func__);
+     return result;
+@@ -841,8 +850,10 @@ X_STATUS Emulator::DataMigration(const uint64_t xuid) {
      migration_status_message.append(
          " For more information check xenia.log file.");
    }
@@ -27,7 +44,7 @@ index eadd15ccf..4c379dc98 100644
    return X_STATUS_SUCCESS;
  }
  
-@@ -906,9 +911,11 @@ X_STATUS Emulator::ProcessContentPackageHeader(
+@@ -906,9 +917,11 @@ X_STATUS Emulator::ProcessContentPackageHeader(
    installation_info.content_size_ = package->GetPackageSize();
    installation_info.installation_state_ = InstallState::pending;
  
@@ -42,7 +59,7 @@ index eadd15ccf..4c379dc98 100644
  
    return X_STATUS_SUCCESS;
  }
-@@ -1566,7 +1573,8 @@ X_STATUS Emulator::CompleteLaunch(const std::filesystem::path& path,
+@@ -1566,7 +1579,8 @@ X_STATUS Emulator::CompleteLaunch(const std::filesystem::path& path,
    // Making changes to the UI (setting the icon) and executing game config
    // load callbacks which expect to be called from the UI thread.
    // If not on UI thread, dispatch to it synchronously.
@@ -52,7 +69,7 @@ index eadd15ccf..4c379dc98 100644
      X_STATUS result = X_STATUS_UNSUCCESSFUL;
      display_window_->app_context().CallInUIThreadSynchronous(
          [this, &path, &module_path, &result]() {
-@@ -1598,7 +1606,9 @@ X_STATUS Emulator::CompleteLaunch(const std::filesystem::path& path,
+@@ -1598,7 +1612,9 @@ X_STATUS Emulator::CompleteLaunch(const std::filesystem::path& path,
    title_id_ = std::nullopt;
    title_name_ = "";
    title_version_ = "";
@@ -63,7 +80,7 @@ index eadd15ccf..4c379dc98 100644
  
    // Allow xam to request module loads.
    auto xam = kernel_state()->GetKernelModule<kernel::xam::XamModule>("xam.xex");
-@@ -1805,7 +1815,7 @@ X_STATUS Emulator::CompleteLaunch(const std::filesystem::path& path,
+@@ -1805,7 +1821,7 @@ X_STATUS Emulator::CompleteLaunch(const std::filesystem::path& path,
               table.str());
  
        auto icon_block = game_info_database_->GetIcon();
