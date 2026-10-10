@@ -28,6 +28,9 @@
 #include "xenia/kernel/kernel_flags.h"
 #include "xenia/memory.h"
 
+// declared where they are defined, in sources with no header for them
+DECLARE_bool(emit_inline_mmio_checks);
+
 DEFINE_transient_path(target, "", "The program to run.", "Chimera");
 DEFINE_transient_string(renderer, "null", "null or vulkan.", "Chimera");
 DEFINE_transient_string(seconds, "10", "How long to run, on the host's clock.", "Chimera");
@@ -62,6 +65,12 @@ int RunNative(const std::vector<std::string>& args) {
   // results differ - a fused multiply-add rounds once, two steps round twice -
   // so a host without both cannot run the same machine, and is refused.
   cvars::x64_extension_mask = xe::amd64::kX64EmitAVX2 | xe::amd64::kX64EmitFMA;
+
+  // The console's device registers are found by looking at the address of a
+  // 32-bit load or store, and not by letting it fault and reading the
+  // processor's state in a signal handler: a guest gets no such state.
+  // Upstream has both; this is its other one.
+  cvars::emit_inline_mmio_checks = true;
   {
     const uint64_t have = xe::amd64::GetFeatureFlags();
     const uint64_t need = xe::amd64::kX64EmitAVX2 | xe::amd64::kX64EmitFMA;

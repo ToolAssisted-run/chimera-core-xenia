@@ -285,6 +285,47 @@ fails the forked reference's set exactly, and the game still repeats (the
 same memory at five seconds; 258,326 handings over where it was 257,171,
 because clock reads now move the clock).
 
+## M2: the memory in one block (2026-10-10)
+
+Upstream's emulated memory is one shared file seen in several places: the
+512 MiB of physical memory at 0xA0000000, 0xC0000000 and 0xE0000000 (4 KiB
+on), its first 16 MiB again from 0x7F000000, and the 0x80000000 code range
+again at 0x90000000. A guest has anonymous memory only; a page is at one
+address.
+
+Patch 0006 (`CHIMERA_FLATMEM`, on in the scheduler tree) makes the address
+space ONE block of 4 GiB. Each alias is folded onto what it is an alias of
+before it is used, and physical memory is the block's own 0xA0000000 range.
+The fold is a table of 256 numbers, one for each top byte of an address,
+kept just below the block: `folded = address + table[address >> 24]` in 32
+bits. Every way from a guest address to a host one turned out to pass
+through four places: `Memory::TranslateVirtual` (421 uses), the same in the
+recompiler's context, the heaps' `TranslateRelative`, and the recompiler's
+two address functions with three stragglers (the compare-exchanges and the
+cache-control sequence). The recompiler's fold is four instructions and one
+register: `mov eax, a; shr eax, 24; mov eax, [membase + rax*4 - 0x400]; add
+eax, a`.
+
+**Device registers are found by address, not by fault.** A guest cannot
+catch a fault and read the processor's state, which is how upstream emulates
+a load or store that lands on a register. Canary has the other way already
+(`emit_inline_mmio_checks`: every 32-bit load and store checks whether its
+address is in 0x7FC00000-0x7FFFFFFF); the driver turns it on. It also keeps
+the register ranges from being protected, which matters here: 0x7F...... is
+an alias of physical memory, and protecting the folded page would have
+taken 64 KiB out of the console's RAM.
+
+Proved natively, where both layouts can be had: with the block and the
+inline checks the game's run is the run it was - 258,326, 437,
+ed611adef65dbf20 - and the instruction tests fail the reference's 28,320.
+
+Not dealt with: one thing the views gave that a block cannot. Upstream
+protects a page in the guest's views to notice a write (the GPU's caches do
+this) while reaching the same page itself, unprotected, through the
+physical view. With one block the emulator's own access meets its own
+protection. The null renderer sets no such watch, so nothing has met it
+yet; the Vulkan renderer will.
+
 ## The recompiler's own tests (2026-10-10)
 
 Upstream has 570 files of PowerPC instruction tests

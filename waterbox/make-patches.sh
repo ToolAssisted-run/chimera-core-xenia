@@ -15,6 +15,7 @@ series='
 0003-chimera-one-thread-at-a-time-on-one-clock|*
 0004-chimera-what-gcc-will-not-take|src/xenia/base/cvar.h src/xenia/base/memory.cc src/xenia/gpu/command_processor.h
 0005-chimera-the-instruction-tests-in-one-process|src/xenia/cpu/ppc/testing/ppc_testing_main.cc src/xenia/cpu/ppc/testing/CMakeLists.txt
+0006-chimera-the-memory-in-one-block|src/xenia/base/chimera_flatmem.h src/xenia/memory.h src/xenia/memory.cc src/xenia/cpu/ppc/ppc_context.h src/xenia/cpu/backend/x64/x64_seq_memory.cc
 '
 
 # new files are part of the difference

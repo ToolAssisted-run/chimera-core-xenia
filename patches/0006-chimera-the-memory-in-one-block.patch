@@ -1,0 +1,409 @@
+diff --git a/src/xenia/base/chimera_flatmem.h b/src/xenia/base/chimera_flatmem.h
+new file mode 100644
+index 000000000..ec3aaeab3
+--- /dev/null
++++ b/src/xenia/base/chimera_flatmem.h
+@@ -0,0 +1,45 @@
++// chimera: the console's memory without views.
++//
++// Upstream maps one shared file at several places: the 512 MiB of physical
++// memory are seen at 0xA0000000, at 0xC0000000, at 0xE0000000 (4 KiB on) and
++// from 0x7F000000 (its first 16 MiB), and the code range at 0x80000000 is
++// seen again at 0x90000000. A sandboxed guest has anonymous memory only: a
++// page is at one address.
++//
++// So here the emulated address space is ONE block of 4 GiB, each alias is
++// FOLDED onto the range it is an alias of before it is used, and physical
++// memory is the block's own 0xA0000000 range. The fold is a table of 256
++// 32-bit numbers, one for each top byte of an address, kept just below the
++// block: folded = address + table[address >> 24], in 32 bits. The recompiler
++// does that in four instructions with one register (x64_seq_memory.cc), and
++// everything else through Memory::TranslateVirtual.
++#ifndef XENIA_BASE_CHIMERA_FLATMEM_H_
++#define XENIA_BASE_CHIMERA_FLATMEM_H_
++
++#include <cstdint>
++
++namespace xe {
++namespace chimera {
++
++// Where physical memory is in the block.
++constexpr uint32_t kPhysicalBase = 0xA0000000u;
++// The table's place: this many bytes below the block.
++constexpr uint32_t kFoldTableBelow = 0x400;
++
++// What is added to an address whose top byte is this one.
++constexpr uint32_t FoldDelta(uint32_t top_byte) {
++  return top_byte == 0x7F                     ? kPhysicalBase - 0x7F000000u
++         : top_byte >= 0x90 && top_byte <= 0x9F ? 0x80000000u - 0x90000000u
++         : top_byte >= 0xC0 && top_byte <= 0xDF ? kPhysicalBase - 0xC0000000u
++         : top_byte >= 0xE0                     ? kPhysicalBase + 0x1000u - 0xE0000000u
++                                                : 0u;
++}
++
++constexpr uint32_t FoldAddress(uint32_t address) {
++  return address + FoldDelta(address >> 24);
++}
++
++}  // namespace chimera
++}  // namespace xe
++
++#endif  // XENIA_BASE_CHIMERA_FLATMEM_H_
+diff --git a/src/xenia/cpu/backend/x64/x64_seq_memory.cc b/src/xenia/cpu/backend/x64/x64_seq_memory.cc
+index f59af1102..72f4a8a37 100644
+--- a/src/xenia/cpu/backend/x64/x64_seq_memory.cc
++++ b/src/xenia/cpu/backend/x64/x64_seq_memory.cc
+@@ -7,6 +7,7 @@
+  ******************************************************************************
+  */
+ 
++#include "xenia/base/chimera_flatmem.h"
+ #include "xenia/cpu/backend/x64/x64_sequences.h"
+ 
+ #include <cstring>
+@@ -188,8 +189,43 @@ static bool is_definitely_not_eo(const T& v) {
+   return is_eo_def(v.value);
+ }
+ // Note: most *should* be aligned, but needs to be checked!
++#ifdef CHIMERA_FLATMEM
++// chimera: dst = the address in `guest` (plus `offset`), with the aliased
++// ranges folded onto what they are aliases of (base/chimera_flatmem.h): the
++// table just below the memory base is indexed by the address's top byte.
++// dst is the only register written, and must not be `guest`.
++static void EmitFoldedAddress(X64Emitter& e, const Xbyak::Reg32& dst,
++                              const Xbyak::Reg32& guest, int32_t offset) {
++  if (offset) {
++    e.lea(dst, e.ptr[guest + offset]);
++  } else {
++    e.mov(dst, guest);
++  }
++  e.shr(dst, 24);
++  e.mov(dst, e.dword[e.GetMembaseReg() + dst.cvt64() * 4 -
++                     xe::chimera::kFoldTableBelow]);
++  e.add(dst, guest);
++  if (offset) {
++    e.add(dst, offset);
++  }
++}
++#endif
++
+ template <typename T>
+ RegExp ComputeMemoryAddress(X64Emitter& e, const T& guest) {
++#ifdef CHIMERA_FLATMEM
++  if (guest.is_constant) {
++    const uint32_t address =
++        xe::chimera::FoldAddress(static_cast<uint32_t>(guest.constant()));
++    if (address < 0x80000000) {
++      return e.GetMembaseReg() + address;
++    }
++    e.mov(e.eax, address);
++    return e.GetMembaseReg() + e.rax;
++  }
++  EmitFoldedAddress(e, e.eax, guest.reg().cvt32(), 0);
++  return e.GetMembaseReg() + e.rax;
++#endif
+   if (guest.is_constant) {
+     // TODO(benvanik): figure out how to do this without a temp.
+     // Since the constant is often 0x8... if we tried to use that as a
+@@ -244,6 +280,19 @@ RegExp ComputeMemoryAddressOffset(X64Emitter& e, const T& guest,
+   if (offset_const == 0) {
+     return ComputeMemoryAddress(e, guest);
+   }
++#ifdef CHIMERA_FLATMEM
++  if (guest.is_constant) {
++    const uint32_t address = xe::chimera::FoldAddress(
++        static_cast<uint32_t>(guest.constant()) + offset_const);
++    if (address < 0x80000000) {
++      return e.GetMembaseReg() + address;
++    }
++    e.mov(e.eax, address);
++    return e.GetMembaseReg() + e.rax;
++  }
++  EmitFoldedAddress(e, e.eax, guest.reg().cvt32(), offset_const);
++  return e.GetMembaseReg() + e.rax;
++#endif
+   if (guest.is_constant) {
+     uint32_t address = static_cast<uint32_t>(guest.constant());
+     address += offset_const;
+@@ -541,7 +590,11 @@ struct ATOMIC_COMPARE_EXCHANGE_I32
+       e.jae(fixup_label, e.T_NEAR);
+       e.L(backtous);
+     } else {
++#ifdef CHIMERA_FLATMEM
++      EmitFoldedAddress(e, e.ecx, i.src1.reg().cvt32(), 0);
++#else
+       e.mov(e.ecx, i.src1.reg().cvt32());
++#endif
+     }
+     e.lock();
+     e.cmpxchg(e.dword[e.GetMembaseReg() + e.rcx], i.src3);
+@@ -571,7 +624,11 @@ struct ATOMIC_COMPARE_EXCHANGE_I64
+       e.jae(fixup_label, e.T_NEAR);
+       e.L(backtous);
+     } else {
++#ifdef CHIMERA_FLATMEM
++      EmitFoldedAddress(e, e.ecx, i.src1.reg().cvt32(), 0);
++#else
+       e.mov(e.ecx, i.src1.reg().cvt32());
++#endif
+     }
+     e.lock();
+     e.cmpxchg(e.qword[e.GetMembaseReg() + e.rcx], i.src3);
+@@ -1161,7 +1218,11 @@ static void MMIOAwareStore(void* _ctx, unsigned int guestaddr, T value) {
+ 
+   auto gaddr = ctx->processor->memory()->LookupVirtualMappedRange(guestaddr);
+   if (!gaddr) {
++#ifdef CHIMERA_FLATMEM
++    *ctx->TranslateVirtual<T*>(guestaddr) = value;
++#else
+     *reinterpret_cast<T*>(ctx->virtual_membase + guestaddr) = value;
++#endif
+   } else {
+     value = xe::byte_swap(value); /*
+           was having issues, found by comparing the values used with exceptions
+@@ -1183,7 +1244,11 @@ static T MMIOAwareLoad(void* _ctx, unsigned int guestaddr) {
+ 
+   auto gaddr = ctx->processor->memory()->LookupVirtualMappedRange(guestaddr);
+   if (!gaddr) {
++#ifdef CHIMERA_FLATMEM
++    value = *ctx->TranslateVirtual<T*>(guestaddr);
++#else
+     value = *reinterpret_cast<T*>(ctx->virtual_membase + guestaddr);
++#endif
+     if (swap) {
+       value = xe::byte_swap(value);
+     }
+@@ -1933,6 +1998,9 @@ struct CACHE_CONTROL
+       // Since the constant is often 0x8... if we tried to use that as a
+       // displacement it would be sign extended and mess things up.
+       address_constant = static_cast<uint32_t>(i.src1.constant());
++#ifdef CHIMERA_FLATMEM
++      address_constant = xe::chimera::FoldAddress(address_constant);
++#endif
+       if (address_constant < 0x80000000) {
+         addr = e.GetMembaseReg() + address_constant;
+       } else {
+@@ -1967,7 +2035,11 @@ struct CACHE_CONTROL
+       } else {
+         // Clear the top 32 bits, as they are likely garbage.
+         // TODO(benvanik): find a way to avoid doing this.
++#ifdef CHIMERA_FLATMEM
++        EmitFoldedAddress(e, e.eax, i.src1.reg().cvt32(), 0);
++#else
+         e.mov(e.eax, i.src1.reg().cvt32());
++#endif
+       }
+       addr = e.GetMembaseReg() + e.rax;
+     }
+diff --git a/src/xenia/cpu/ppc/ppc_context.h b/src/xenia/cpu/ppc/ppc_context.h
+index 0c46e8c1e..c8a749735 100644
+--- a/src/xenia/cpu/ppc/ppc_context.h
++++ b/src/xenia/cpu/ppc/ppc_context.h
+@@ -14,6 +14,7 @@
+ #include <mutex>
+ #include <string>
+ 
++#include "xenia/base/chimera_flatmem.h"
+ #include "xenia/base/mutex.h"
+ #include "xenia/base/vec128.h"
+ #include "xenia/guest_pointers.h"
+@@ -433,6 +434,15 @@ typedef struct alignas(64) PPCContext_s {
+   template <typename T = uint8_t*>
+   inline T TranslateVirtual(uint32_t guest_address) XE_RESTRICT const {
+     static_assert(std::is_pointer_v<T>);
++#ifdef CHIMERA_FLATMEM
++    // chimera: one block, the aliases folded (base/chimera_flatmem.h)
++    return reinterpret_cast<T>(
++        virtual_membase +
++        uint32_t(guest_address +
++                 reinterpret_cast<const uint32_t*>(
++                     virtual_membase - chimera::kFoldTableBelow)[guest_address >>
++                                                                 24]));
++#endif
+     uint8_t* host_address = virtual_membase + guest_address;
+ #if XE_PLATFORM_WIN32 == 1
+     if (guest_address >=
+diff --git a/src/xenia/memory.cc b/src/xenia/memory.cc
+index 706bd4809..3c5e7a104 100644
+--- a/src/xenia/memory.cc
++++ b/src/xenia/memory.cc
+@@ -7,6 +7,7 @@
+  ******************************************************************************
+  */
+ 
++#include "xenia/base/chimera_flatmem.h"
+ #include "xenia/memory.h"
+ 
+ #include <cstring>
+@@ -162,6 +163,18 @@ Memory::~Memory() {
+   heaps_.vE0000000.Dispose();
+   heaps_.physical.Dispose();
+ 
++#ifdef CHIMERA_FLATMEM
++  // chimera: the one block, with the table's room below it
++  if (mapping_base_) {
++    const size_t table_room = xe::memory::allocation_granularity() > 0x1000
++                                  ? xe::memory::allocation_granularity()
++                                  : 0x1000;
++    xe::memory::DeallocFixed(mapping_base_ - table_room,
++                             table_room + 0x100000000ull,
++                             xe::memory::DeallocationType::kRelease);
++    mapping_base_ = nullptr;
++  }
++#endif
+   // Unmap all views and close mapping.
+   if (mapping_ != xe::memory::kFileMappingHandleInvalid) {
+     UnmapViews();
+@@ -175,6 +188,33 @@ Memory::~Memory() {
+ }
+ 
+ bool Memory::Initialize() {
++#ifdef CHIMERA_FLATMEM
++  // chimera: one block of anonymous memory and no views. A page below it
++  // holds the fold table; the pages are the host's to commit as they are
++  // touched, as the file's were.
++  {
++    const size_t table_room = xe::memory::allocation_granularity() > 0x1000
++                                  ? xe::memory::allocation_granularity()
++                                  : 0x1000;
++    auto* block = reinterpret_cast<uint8_t*>(xe::memory::AllocFixed(
++        nullptr, table_room + 0x100000000ull,
++        xe::memory::AllocationType::kReserveCommit,
++        xe::memory::PageAccess::kReadWrite));
++    if (!block) {
++      XELOGE("Unable to reserve the 4gb guest address space.");
++      assert_always();
++      return false;
++    }
++    mapping_base_ = block + table_room;
++    auto* fold =
++        reinterpret_cast<uint32_t*>(mapping_base_ - chimera::kFoldTableBelow);
++    for (uint32_t top = 0; top < 256; top++) {
++      fold[top] = chimera::FoldDelta(top);
++    }
++    virtual_membase_ = mapping_base_;
++    physical_membase_ = mapping_base_ + chimera::kPhysicalBase;
++  }
++#else
+   file_name_ = fmt::format("xenia_memory_{}", Clock::QueryHostTickCount());
+ 
+   // Create main page file-backed mapping. This is all reserved but
+@@ -206,6 +246,7 @@ bool Memory::Initialize() {
+   }
+   virtual_membase_ = mapping_base_;
+   physical_membase_ = mapping_base_ + 0x100000000ull;
++#endif  // CHIMERA_FLATMEM
+ 
+   // Prepare virtual heaps.
+   heaps_.v00000000.Initialize(this, virtual_membase_, HeapType::kGuestVirtual,
+@@ -601,12 +642,23 @@ bool Memory::AccessViolationCallback(
+   // Access via physical_membase_ is special, when need to bypass everything
+   // (for instance, for a data provider to actually write the data) so only
+   // triggering callbacks on virtual memory regions.
++#ifdef CHIMERA_FLATMEM
++  // chimera: with one block there is no second, unprotected way to physical
++  // memory to tell apart: anything in the block is the machine's.
++  if (reinterpret_cast<size_t>(host_address) <
++          reinterpret_cast<size_t>(virtual_membase_) ||
++      reinterpret_cast<size_t>(host_address) >=
++          reinterpret_cast<size_t>(virtual_membase_) + 0x100000000ull) {
++    return false;
++  }
++#else
+   if (reinterpret_cast<size_t>(host_address) <
+           reinterpret_cast<size_t>(virtual_membase_) ||
+       reinterpret_cast<size_t>(host_address) >=
+           reinterpret_cast<size_t>(physical_membase_)) {
+     return false;
+   }
++#endif
+   uint32_t virtual_address = HostToGuestVirtual(host_address);
+   BaseHeap* heap = LookupHeap(virtual_address);
+   if (heap->heap_type() != HeapType::kGuestPhysical) {
+@@ -1598,8 +1650,9 @@ bool BaseHeap::Protect(uint32_t address, uint32_t size, uint32_t protect,
+         }
+ 
+         xe::memory::Protect(
+-            reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(membase_) +
+-                                    heap_base_ + host_offset),
++            // chimera: where the heap really is (folded, when flat)
++            reinterpret_cast<void*>(TranslateRelative<uint8_t*>(0) -
++                                    host_address_offset_ + host_offset),
+             xe_page_size, host_access, nullptr);
+       }
+ 
+@@ -2084,7 +2137,8 @@ template <bool enable_invalidation_notifications, bool enable_data_providers>
+ XE_NOINLINE void PhysicalHeap::EnableAccessCallbacksInner(
+     const uint32_t system_page_first, const uint32_t system_page_last,
+     xe::memory::PageAccess protect_access) XE_RESTRICT {
+-  uint8_t* protect_base = membase_ + heap_base_;
++  uint8_t* protect_base =
++      TranslateRelative<uint8_t*>(0) - host_address_offset_;  // chimera: folded when flat
+   uint32_t protect_system_page_first = UINT32_MAX;
+ 
+   SystemPageFlagsBlock* XE_RESTRICT sys_page_flags = system_page_flags_.data();
+@@ -2250,7 +2304,8 @@ bool PhysicalHeap::TriggerCallbacks(
+     // read-only if it also has a write watch, otherwise restore the guest
+     // protection. Then clear the read watch.
+     if (unprotect) {
+-      uint8_t* protect_base = membase_ + heap_base_;
++      uint8_t* protect_base =
++      TranslateRelative<uint8_t*>(0) - host_address_offset_;  // chimera: folded when flat
+       for (uint32_t i = system_page_first; i <= system_page_last; ++i) {
+         uint64_t bit = uint64_t(1) << (i & 63);
+         SystemPageFlagsBlock& flags = system_page_flags_[i >> 6];
+@@ -2376,7 +2431,8 @@ bool PhysicalHeap::TriggerCallbacks(
+ 
+   // Unprotect ranges that need unprotection.
+   if (unprotect) {
+-    uint8_t* protect_base = membase_ + heap_base_;
++    uint8_t* protect_base =
++      TranslateRelative<uint8_t*>(0) - host_address_offset_;  // chimera: folded when flat
+     uint32_t unprotect_system_page_first = UINT32_MAX;
+     for (uint32_t i = system_page_first; i <= system_page_last; ++i) {
+       // Check if need to allow writing to this page. Read-watched pages are
+diff --git a/src/xenia/memory.h b/src/xenia/memory.h
+index 9cd67e30a..edb6ac178 100644
+--- a/src/xenia/memory.h
++++ b/src/xenia/memory.h
+@@ -18,6 +18,7 @@
+ #include <utility>
+ #include <vector>
+ 
++#include "xenia/base/chimera_flatmem.h"
+ #include "xenia/base/memory.h"
+ #include "xenia/base/mutex.h"
+ #include "xenia/cpu/mmio_handler.h"
+@@ -153,6 +154,17 @@ class BaseHeap {
+ 
+   template <typename T = uint8_t*>
+   inline T TranslateRelative(size_t relative_address) const {
++#ifdef CHIMERA_FLATMEM
++    // chimera: a heap of an aliased range lies where the range is folded to.
++    // The fold is the same for every address of a heap, so the heap is still
++    // one piece. The physical heap has its own base and nothing to fold.
++    if (heap_type_ != HeapType::kGuestPhysical || heap_base_ != 0) {
++      return reinterpret_cast<T>(
++          membase_ +
++          chimera::FoldAddress(heap_base_ + host_address_offset_) +
++          relative_address);
++    }
++#endif
+     return reinterpret_cast<T>(membase_ + heap_base_ + host_address_offset_ +
+                                relative_address);
+   }
+@@ -429,6 +441,14 @@ class Memory {
+       host_address += 0x1000;
+     }
+     return reinterpret_cast<T>(host_address);
++#elif defined(CHIMERA_FLATMEM)
++    // chimera: one block, the aliases folded (base/chimera_flatmem.h)
++    return reinterpret_cast<T>(
++        virtual_membase_ +
++        uint32_t(guest_address +
++                 reinterpret_cast<const uint32_t*>(
++                     virtual_membase_ - chimera::kFoldTableBelow)[guest_address >>
++                                                                  24]));
+ #else
+     uint8_t* host_address = virtual_membase_ + guest_address;
+     const auto heap = LookupHeap(guest_address);
