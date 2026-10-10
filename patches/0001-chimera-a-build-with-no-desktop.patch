@@ -121,20 +121,24 @@ index 1f7a88d01..fc582b9dc 100644
  if(_base_exclude AND _base_srcs)
    list(REMOVE_ITEM _base_srcs ${_base_exclude})
 diff --git a/src/xenia/ui/CMakeLists.txt b/src/xenia/ui/CMakeLists.txt
-index fc0d69f85..67c7c4f3b 100644
+index fc0d69f85..4fc8d0702 100644
 --- a/src/xenia/ui/CMakeLists.txt
 +++ b/src/xenia/ui/CMakeLists.txt
-@@ -4,6 +4,9 @@ xe_platform_sources(xenia-ui ${CMAKE_CURRENT_SOURCE_DIR})
+@@ -4,6 +4,13 @@ xe_platform_sources(xenia-ui ${CMAKE_CURRENT_SOURCE_DIR})
  file(GLOB _ui_exclude   "${CMAKE_CURRENT_SOURCE_DIR}/*_demo.cc"
    "${CMAKE_CURRENT_SOURCE_DIR}/windowed_app_main_*.cc"
  )
 +if(NOT CHIMERA_HEADLESS)
 +  list(APPEND _ui_exclude "${CMAKE_CURRENT_SOURCE_DIR}/chimera_headless.cc")
++else()
++  # an X surface is not a thing a headless build can have
++  file(GLOB _ui_surfaces "${CMAKE_CURRENT_SOURCE_DIR}/surface_gnulinux.*")
++  list(APPEND _ui_exclude ${_ui_surfaces})
 +endif()
  get_target_property(_ui_srcs xenia-ui SOURCES)
  if(_ui_exclude AND _ui_srcs)
    list(REMOVE_ITEM _ui_srcs ${_ui_exclude})
-@@ -12,7 +15,7 @@ endif()
+@@ -12,7 +19,7 @@ endif()
  target_link_libraries(xenia-ui PUBLIC xenia-base)
  if(WIN32)
    target_link_libraries(xenia-ui PRIVATE dwmapi dxgi winmm)
@@ -216,3 +220,88 @@ index d803160c7..5420bc405 100644
    // On Linux, find and merge CJK font using fontconfig
    FcConfig* config = FcInitLoadConfigAndFonts();
    if (!config) {
+diff --git a/src/xenia/ui/vulkan/vulkan_api.h b/src/xenia/ui/vulkan/vulkan_api.h
+index 27f99fdf0..c9d1b74f9 100644
+--- a/src/xenia/ui/vulkan/vulkan_api.h
++++ b/src/xenia/ui/vulkan/vulkan_api.h
+@@ -27,7 +27,8 @@
+ #endif
+ #endif
+ 
+-#if XE_PLATFORM_GNU_LINUX
++// chimera: a headless build has no window system to make a surface on
++#if XE_PLATFORM_GNU_LINUX && !defined(CHIMERA_HEADLESS)
+ #ifndef VK_USE_PLATFORM_XCB_KHR
+ #define VK_USE_PLATFORM_XCB_KHR
+ #endif
+diff --git a/src/xenia/ui/vulkan/vulkan_presenter.cc b/src/xenia/ui/vulkan/vulkan_presenter.cc
+index 68b97e788..112d1b46a 100644
+--- a/src/xenia/ui/vulkan/vulkan_presenter.cc
++++ b/src/xenia/ui/vulkan/vulkan_presenter.cc
+@@ -7,6 +7,7 @@
+  ******************************************************************************
+  */
+ 
++#include "xenia/base/chimera_sync.h"
+ #include "xenia/ui/vulkan/vulkan_presenter.h"
+ 
+ #include <cstdint>
+@@ -21,7 +22,7 @@
+ #if XE_PLATFORM_ANDROID
+ #include "xenia/ui/surface_android.h"
+ #endif
+-#if XE_PLATFORM_GNU_LINUX
++#if XE_PLATFORM_GNU_LINUX && !defined(CHIMERA_HEADLESS)
+ #include "xenia/ui/surface_gnulinux.h"
+ #endif
+ #if XE_PLATFORM_WIN32
+@@ -208,7 +209,7 @@ Surface::TypeFlags VulkanPresenter::GetSurfaceTypesSupportedByInstance(
+     type_flags |= Surface::kTypeFlag_AndroidNativeWindow;
+   }
+ #endif
+-#if XE_PLATFORM_GNU_LINUX
++#if XE_PLATFORM_GNU_LINUX && !defined(CHIMERA_HEADLESS)
+   if (instance_extensions.ext_KHR_xcb_surface) {
+     type_flags |= Surface::kTypeFlag_XcbWindow;
+   }
+@@ -233,7 +234,7 @@ bool VulkanPresenter::CaptureGuestOutput(RawImage& image_out) {
+   std::shared_ptr<GuestOutputImage> guest_output_image;
+   {
+     uint32_t guest_output_mailbox_index;
+-    std::unique_lock<std::mutex> guest_output_consumer_lock(
++    std::unique_lock<xe::sync::mutex> guest_output_consumer_lock(
+         ConsumeGuestOutput(guest_output_mailbox_index, nullptr, nullptr));
+     if (guest_output_mailbox_index != UINT32_MAX) {
+       assert_true(guest_output_images_[guest_output_mailbox_index]
+@@ -586,7 +587,7 @@ VulkanPresenter::ConnectOrReconnectPaintingToSurfaceFromUIThread(
+             &paint_context_.vulkan_surface);
+       } break;
+ #endif
+-#if XE_PLATFORM_GNU_LINUX
++#if XE_PLATFORM_GNU_LINUX && !defined(CHIMERA_HEADLESS)
+       case Surface::kTypeIndex_XcbWindow: {
+         auto& xcb_window_surface =
+             static_cast<const XcbWindowSurface&>(new_surface);
+@@ -1516,7 +1517,7 @@ Presenter::PaintResult VulkanPresenter::PaintAndPresentImpl(
+   std::shared_ptr<GuestOutputImage> guest_output_image;
+   {
+     uint32_t guest_output_mailbox_index;
+-    std::unique_lock<std::mutex> guest_output_consumer_lock(
++    std::unique_lock<xe::sync::mutex> guest_output_consumer_lock(
+         ConsumeGuestOutput(guest_output_mailbox_index, &guest_output_properties,
+                            &guest_output_paint_config));
+     if (guest_output_mailbox_index != UINT32_MAX) {
+diff --git a/third_party/CMakeLists.txt b/third_party/CMakeLists.txt
+index 808f0ee9f..3bc9fba2e 100644
+--- a/third_party/CMakeLists.txt
++++ b/third_party/CMakeLists.txt
+@@ -455,7 +455,8 @@ elseif(APPLE)
+   find_library(SDL2_LIBRARY SDL2 REQUIRED)
+   target_include_directories(SDL2 INTERFACE "${SDL2_LIBRARY}/Headers")
+   target_link_libraries(SDL2 INTERFACE "${SDL2_LIBRARY}")
+-elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
++elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT CHIMERA_HEADLESS)
++  # chimera: nothing of a headless build uses SDL
+   # Use system SDL2 on Linux
+   add_library(SDL2 INTERFACE)
+   find_package(PkgConfig REQUIRED)

@@ -251,6 +251,40 @@ a given: everything outside the recompiler is the compiler's arithmetic.
 `waterbox/make-patches.sh` writes `patches/` from the tree, by path, so that
 the series is always what the tree is.
 
+## M2, first steps: it compiles for the sandbox (2026-10-10)
+
+`waterbox/guest-toolchain.cmake` is miniBox's guest as a CMake toolchain
+(musl, a static libstdc++, the large code model, nothing of the host's;
+`MINIBOX_DIR` names the checkout). The guest compiler on this machine is GCC
+14.2, a version stricter than the 13 the native probe used. With it the whole
+of Xenia - 34 libraries, the Vulkan renderer and FFmpeg among them -
+compiles for the guest once three things of the host's are kept out:
+
+- SDL, which the third-party build looks up with the host's `pkg-config`
+  and nothing of a headless build uses;
+- the X window system: the Vulkan headers were told to bring XCB in, the
+  presenter knew how to make an X surface, and the UI library had one;
+- `linux/futex.h`, for locks the scheduler build does not have.
+
+Nothing of it has RUN in the sandbox yet. What is known to stand in the way,
+from the source: the emulated memory is views of one shared mapping, the
+recompiler's tables sit at fixed addresses below 4 GiB, and its faults are
+caught by a signal handler that reads the machine context.
+
+**The instruction tests are the proof to hold it to, and they had to run in
+one process first.** Upstream forks a child per test on POSIX, which a guest
+cannot. Patch 0005 gives the runner the in-process path it has on Windows
+(and, for a guest, a list of tests to read where it would have listed a
+directory). Under the scheduler, natively, that first failed 28,321 tests
+where the forked run fails 28,320. The one was upstream's own test of the
+time base, `mftb_1`: two reads in a row must not be the same moment, and on
+virtual time they were - both in one block, a quarter of a nanosecond apart.
+A read of the time base now costs one of its ticks (20 ns), as an
+instruction that slow does. With that the in-process run under the scheduler
+fails the forked reference's set exactly, and the game still repeats (the
+same memory at five seconds; 258,326 handings over where it was 257,171,
+because clock reads now move the clock).
+
 ## The recompiler's own tests (2026-10-10)
 
 Upstream has 570 files of PowerPC instruction tests

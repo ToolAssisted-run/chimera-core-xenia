@@ -592,9 +592,18 @@ index 073de13fd..2cf2880a8 100644
  
  #if !XE_PLATFORM_ANDROID
 diff --git a/src/xenia/base/mutex.cc b/src/xenia/base/mutex.cc
-index 09b671a41..2d02a0515 100644
+index 09b671a41..6591c322f 100644
 --- a/src/xenia/base/mutex.cc
 +++ b/src/xenia/base/mutex.cc
+@@ -10,7 +10,7 @@
+ #include "xenia/base/mutex.h"
+ #if XE_PLATFORM_WIN32 == 1
+ #include "xenia/base/platform_win.h"
+-#elif XE_PLATFORM_LINUX == 1
++#elif XE_PLATFORM_LINUX == 1 && !defined(CHIMERA_VSCHED)  // chimera: no futex of its own
+ #include <linux/futex.h>
+ #include <pthread.h>
+ #include <sys/syscall.h>
 @@ -18,7 +18,9 @@
  #endif
  
@@ -1763,6 +1772,32 @@ index 694c92b4e..eed8f7234 100644
      // Process instructions.
      const Instr* instr = block->instr_head;
      while (instr) {
+diff --git a/src/xenia/cpu/backend/x64/x64_sequences.cc b/src/xenia/cpu/backend/x64/x64_sequences.cc
+index 29c885add..1444a5d3d 100644
+--- a/src/xenia/cpu/backend/x64/x64_sequences.cc
++++ b/src/xenia/cpu/backend/x64/x64_sequences.cc
+@@ -22,6 +22,7 @@
+ // load into xmm register:
+ // [0F 0E 0D 0C] [0B 0A 09 08] [07 06 05 04] [03 02 01 00] (w, z, y, x)
+ 
++#include "xenia/base/chimera_vsched.h"
+ #include "xenia/cpu/backend/x64/x64_sequences.h"
+ 
+ #include <cstring>
+@@ -565,6 +566,13 @@ struct LOAD_CLOCK : Sequence<LOAD_CLOCK, I<OPCODE_LOAD_CLOCK, I64Op>> {
+     }
+   }
+   static uint64_t LoadClock(void* raw_context) {
++#ifdef CHIMERA_VSCHED
++    // chimera: reading the time base takes one of its ticks (20 ns), so that
++    // two reads are never the same moment. On the console the instruction is
++    // slow enough for that, and upstream's own test of it (mftb_1) expects
++    // the second of two reads in a row to be later than the first.
++    xe::chimera::Charge(20);
++#endif
+     return Clock::QueryGuestTickCount();
+   }
+ };
 diff --git a/src/xenia/gpu/graphics_system.cc b/src/xenia/gpu/graphics_system.cc
 index f4f4a157d..ca0560fed 100644
 --- a/src/xenia/gpu/graphics_system.cc
@@ -2832,36 +2867,6 @@ index 5b0b0778c..a3183fc98 100644
        VkQueue queue_;
      };
  
-diff --git a/src/xenia/ui/vulkan/vulkan_presenter.cc b/src/xenia/ui/vulkan/vulkan_presenter.cc
-index 68b97e788..e67b9f508 100644
---- a/src/xenia/ui/vulkan/vulkan_presenter.cc
-+++ b/src/xenia/ui/vulkan/vulkan_presenter.cc
-@@ -7,6 +7,7 @@
-  ******************************************************************************
-  */
- 
-+#include "xenia/base/chimera_sync.h"
- #include "xenia/ui/vulkan/vulkan_presenter.h"
- 
- #include <cstdint>
-@@ -233,7 +234,7 @@ bool VulkanPresenter::CaptureGuestOutput(RawImage& image_out) {
-   std::shared_ptr<GuestOutputImage> guest_output_image;
-   {
-     uint32_t guest_output_mailbox_index;
--    std::unique_lock<std::mutex> guest_output_consumer_lock(
-+    std::unique_lock<xe::sync::mutex> guest_output_consumer_lock(
-         ConsumeGuestOutput(guest_output_mailbox_index, nullptr, nullptr));
-     if (guest_output_mailbox_index != UINT32_MAX) {
-       assert_true(guest_output_images_[guest_output_mailbox_index]
-@@ -1516,7 +1517,7 @@ Presenter::PaintResult VulkanPresenter::PaintAndPresentImpl(
-   std::shared_ptr<GuestOutputImage> guest_output_image;
-   {
-     uint32_t guest_output_mailbox_index;
--    std::unique_lock<std::mutex> guest_output_consumer_lock(
-+    std::unique_lock<xe::sync::mutex> guest_output_consumer_lock(
-         ConsumeGuestOutput(guest_output_mailbox_index, &guest_output_properties,
-                            &guest_output_paint_config));
-     if (guest_output_mailbox_index != UINT32_MAX) {
 diff --git a/src/xenia/ui/windowed_app_context.cc b/src/xenia/ui/windowed_app_context.cc
 index 93971ce9a..e83099a47 100644
 --- a/src/xenia/ui/windowed_app_context.cc

@@ -1,0 +1,73 @@
+diff --git a/src/xenia/cpu/ppc/testing/CMakeLists.txt b/src/xenia/cpu/ppc/testing/CMakeLists.txt
+index 28d7a622e..c7874ed48 100644
+--- a/src/xenia/cpu/ppc/testing/CMakeLists.txt
++++ b/src/xenia/cpu/ppc/testing/CMakeLists.txt
+@@ -39,5 +39,11 @@ elseif(XE_TARGET_AARCH64)
+   target_link_libraries(xenia-cpu-ppc-tests PRIVATE xenia-cpu-backend-a64)
+ endif()
+ 
++# chimera: under the scheduler a test is run in the process, as on Windows -
++# a forked child would have the parent's threads' batons and none of the
++# threads
++if(CHIMERA_VSCHED)
++  target_compile_definitions(xenia-cpu-ppc-tests PRIVATE CHIMERA_INPROCESS_TESTS=1)
++endif()
+ xe_target_defaults(xenia-cpu-ppc-tests)
+ add_test(NAME xenia-cpu-ppc-tests COMMAND xenia-cpu-ppc-tests)
+diff --git a/src/xenia/cpu/ppc/testing/ppc_testing_main.cc b/src/xenia/cpu/ppc/testing/ppc_testing_main.cc
+index c60bc872e..ad4d8ace1 100644
+--- a/src/xenia/cpu/ppc/testing/ppc_testing_main.cc
++++ b/src/xenia/cpu/ppc/testing/ppc_testing_main.cc
+@@ -472,6 +472,25 @@ class TestRunner {
+ 
+ bool DiscoverTests(const std::filesystem::path& test_path,
+                    std::vector<std::filesystem::path>& test_files) {
++#ifdef CHIMERA_GUEST
++  // chimera: a guest has files and no directories. The tests are the names
++  // in tests.list, one a line, which the host mounted beside them.
++  if (FILE* list = std::fopen("tests.list", "r")) {
++    char name[256];
++    while (std::fgets(name, sizeof(name), list)) {
++      std::string line(name);
++      while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) {
++        line.pop_back();
++      }
++      if (!line.empty()) {
++        test_files.push_back(test_path / line);
++      }
++    }
++    std::fclose(list);
++    return true;
++  }
++  return false;
++#endif
+   auto file_infos = xe::filesystem::ListFiles(
+       std::filesystem::path(XE_SOURCE_ROOT) / test_path);
+   for (auto& file_info : file_infos) {
+@@ -495,7 +514,7 @@ int filter(unsigned int code) {
+ }
+ #endif  // XE_COMPILER_MSVC
+ 
+-#if !XE_COMPILER_MSVC
++#if !XE_COMPILER_MSVC && !defined(CHIMERA_INPROCESS_TESTS)  // chimera
+ // Run test in isolated child process to catch crashes
+ enum class TestResult {
+   kPassed,
+@@ -599,7 +618,7 @@ TestResult RunTestInChildProcess(TestSuite& test_suite, TestCase& test_case) {
+ void ProtectedRunTest(TestSuite& test_suite, TestRunner& runner,
+                       TestCase& test_case, int& failed_count,
+                       int& passed_count) {
+-#if XE_COMPILER_MSVC
++#if XE_COMPILER_MSVC || defined(CHIMERA_INPROCESS_TESTS)  // chimera
+   try {
+     if (!runner.Setup(test_suite)) {
+       fprintf(stderr, "  [%s] FAILED SETUP\n", test_case.name.c_str());
+@@ -712,7 +731,7 @@ bool RunTests(const std::vector<std::string>& test_names) {
+ 
+   auto start_time = std::chrono::steady_clock::now();
+ 
+-#if XE_COMPILER_MSVC
++#if XE_COMPILER_MSVC || defined(CHIMERA_INPROCESS_TESTS)  // chimera
+   // On Windows, run tests serially grouped by suite
+   TestRunner runner;
+   int suite_index = 0;
