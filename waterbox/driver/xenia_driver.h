@@ -27,6 +27,11 @@ struct Options {
   // Every handing over of the baton on standard error, for finding where two
   // runs part.
   bool trace_schedule = false;
+  // What an instruction costs (picoseconds) and what a wait or a yield costs
+  // (nanoseconds); zero is the machine's own. For measuring: they are what
+  // the machine's speed is made of, and a machine with others is another.
+  int64_t instruction_ps = 0;
+  int64_t yield_ns = 0;
 };
 
 // Switch the machine on with a program in it. False with the reason in error.
@@ -67,6 +72,8 @@ const int16_t* audio(int& pairs);
 uint64_t frames();
 uint64_t time_ns();
 uint64_t switches();
+uint64_t instructions();
+std::string instructions_by_thread();
 // Vertical blanks and presented pictures together, as the emulator counts them.
 uint64_t gpu_counter();
 

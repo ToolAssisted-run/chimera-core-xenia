@@ -194,6 +194,8 @@ int main(int argc, char **argv)
 		(int (*)(void))proc("GetAudioSampleCount"),
 		(uint64_t (*)(void))proc("GetMachineTimeNs"),
 		(uint64_t (*)(void))proc("GetSwitchCount"),
+		(uint64_t (*)(void))proc("GetInstructionCount"),
+		(const char *(*)(void))proc("DebugInstructionsByThread"),
 		(uint64_t (*)(void))proc("GetGpuCounter"),
 		(uint64_t (*)(void))proc("GetRamDigest"),
 		(const uint8_t *(*)(int32_t, int64_t, int32_t))proc("ReadBus"),
@@ -212,6 +214,9 @@ int main(int argc, char **argv)
 		        refused ? "" : "\n");
 		if (refused)
 			fprintf(stderr, " (the last was opcode %ld)\n", last);
+		/* with CHIMERA_VK_STATS=1 this is where the bridge says what crossed
+		 * it and how long each command took */
+		chimera_vk_host_shutdown();
 	}
 	fflush(stdout);
 	fflush(stderr);

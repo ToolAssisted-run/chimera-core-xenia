@@ -58,10 +58,10 @@ if [ "$have_native" = 0 ]; then
 else
 	native a --frames "$frames" --every 60
 	native b --frames "$frames" --every 60
-	CHIMERA_INSTRUCTION_PS=260 native c --frames "$frames" --every 60
+	CHIMERA_INSTRUCTION_PS=1040 native c --frames "$frames" --every 60
 	if [ -s "$work/a.out" ] && cmp -s "$work/a.out" "$work/b.out" && ! cmp -s "$work/a.out" "$work/c.out" &&
 		grep -q "^end frame=$frames " "$work/a.out" && ! grep -q "audioPairs=0 " "$work/a.out"; then
-		report "game:repeats" PASS "$frames frames, twice: $(last "$work/a.out") - and another run when an instruction costs 260 ps instead of 250"
+		report "game:repeats" PASS "$frames frames, twice: $(last "$work/a.out") - and another run when an instruction costs 1040 ps instead of 1000"
 	else
 		report "game:repeats" FAIL "first [$(last "$work/a.out")] second [$(last "$work/b.out")] with another instruction cost [$(last "$work/c.out")] $(tail -1 "$work/a.err")"
 	fi
@@ -178,8 +178,9 @@ fi
 #  - a state saved by one process and carried on by another.
 # All three against the native Vulkan run above, pictures included, at every
 # twentieth frame of a shorter run (a load with this renderer takes two
-# thirds of a second).
-short="${XENIA_GATE_SHORT_FRAMES:-120}"
+# thirds of a second) - 200 frames, because the program shows nothing in its
+# first 80 and a run of blank pictures proves nothing (it is refused).
+short="${XENIA_GATE_SHORT_FRAMES:-200}"
 if [ "$have_native" = 0 ] || [ "$have_sandbox" = 0 ] || [ ! -s "$work/v.out" ]; then
 	why="$why_native"; [ "$have_native" = 1 ] && why="$why_sandbox"
 	[ "$have_native" = 1 ] && [ "$have_sandbox" = 1 ] && why="no Vulkan run to hold it to (picture:bridge did not run)"
@@ -236,8 +237,10 @@ elif [ "$have_sandbox" = 0 ]; then
 	report "frontend:no-card" SKIP "$why_sandbox"
 	report "frontend:savedata" SKIP "$why_sandbox"
 else
-	fe_frames=100
-	shot=80
+	# far enough in for the program to be showing something: a picture that
+	# is blank is refused, whatever it is compared with
+	fe_frames=200
+	shot=180
 	: > "$work/empty.movie"
 	env -u DISPLAY "$engine" "$package" "$game" "$work/empty.movie" --frames "$fe_frames" --record "$work/fe.movie" --gpu > "$work/fe-record.out" 2>&1
 	env -u DISPLAY "$engine" "$package" "$game" "$work/fe.movie" --gpu --screenshot "$shot=$work/fe.tga" > "$work/fe-play.out" 2>&1

@@ -25,6 +25,8 @@ int16_t* GetAudio(void);
 int GetAudioSampleCount(void);
 uint64_t GetMachineTimeNs(void);
 uint64_t GetSwitchCount(void);
+uint64_t GetInstructionCount(void);
+const char* DebugInstructionsByThread(void);
 uint64_t GetGpuCounter(void);
 uint64_t GetRamDigest(void);
 const uint8_t* ReadBus(int32_t, int64_t, int32_t);
@@ -72,7 +74,7 @@ int main(int argc, char** argv) {
   }
   const struct harness_core core = {
       Init,          GetLoadError,        SetAxis,          FrameAdvance,   InputWasRead,       GetAudio,
-      GetAudioSampleCount, GetMachineTimeNs, GetSwitchCount, GetGpuCounter, GetRamDigest, ReadBus, RemakeRenderer, StateSaving,
+      GetAudioSampleCount, GetMachineTimeNs, GetSwitchCount, GetInstructionCount, DebugInstructionsByThread, GetGpuCounter, GetRamDigest, ReadBus, RemakeRenderer, StateSaving,
       GetVideoBgra,  GetVideoWidth,       GetVideoHeight,
       nullptr,       nullptr,             nullptr,
   };

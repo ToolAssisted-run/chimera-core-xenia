@@ -14,6 +14,11 @@
  * --rerecord        a state saved and loaded before every frame (sandbox)
  * --save-state FILE --at F   after frame F, save a state to FILE and stop
  * --state FILE      carry on from a state another process saved
+ * --pace            with --every: on standard error, for each stretch, the
+ *                   host's seconds, the guest's instructions and the handings
+ *                   over - where the time goes (not part of any comparison)
+ * --instruction-ps N, --yield-ns N   another cost of an instruction, of a
+ *                   wait: another machine, for measuring
  * --remake-every N  before every Nth frame the renderer is made again on a
  *                   new device, as it is after a load
  * --ppm FILE [--ppm-at F]    the picture after frame F (the last one without
@@ -23,6 +28,7 @@
 #define CHIMERA_XENIA_GATE_HARNESS_H_
 
 #include <inttypes.h>
+#include <time.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -38,6 +44,8 @@ struct harness_core {
 	int (*GetAudioSampleCount)(void);
 	uint64_t (*GetMachineTimeNs)(void);
 	uint64_t (*GetSwitchCount)(void);
+	uint64_t (*GetInstructionCount)(void);
+	const char *(*DebugInstructionsByThread)(void);
 	uint64_t (*GetGpuCounter)(void);
 	uint64_t (*GetRamDigest)(void);
 	const uint8_t *(*ReadBus)(int32_t, int64_t, int32_t);
@@ -56,7 +64,8 @@ struct harness_core {
 struct harness_event { uint64_t from, count; int index; int64_t value; uint64_t mask; };
 struct harness_opts {
 	uint64_t frames, every, save_at, remake_every;
-	int rerecord, log, pads, trace_schedule;
+	int rerecord, log, pads, trace_schedule, pace;
+	long long instruction_ps, yield_ns;
 	const char *renderer, *save_state, *state, *ppm;
 	uint64_t ppm_at;
 	struct harness_event press[HARNESS_MAX_EVENTS], axis[HARNESS_MAX_EVENTS];
@@ -76,6 +85,7 @@ static int harness_parse(int argc, char **argv, int first, struct harness_opts *
 		if (!strcmp(a, "--rerecord")) { o->rerecord = 1; continue; }
 		if (!strcmp(a, "--log")) { o->log = 1; continue; }
 		if (!strcmp(a, "--trace-schedule")) { o->trace_schedule = 1; continue; }
+		if (!strcmp(a, "--pace")) { o->pace = 1; continue; }
 		if (!v) { fprintf(stderr, "%s wants a value\n", a); return 0; }
 		i++;
 		if (!strcmp(a, "--frames")) o->frames = strtoull(v, NULL, 10);
@@ -83,6 +93,8 @@ static int harness_parse(int argc, char **argv, int first, struct harness_opts *
 		else if (!strcmp(a, "--at")) o->save_at = strtoull(v, NULL, 10);
 		else if (!strcmp(a, "--remake-every")) o->remake_every = strtoull(v, NULL, 10);
 		else if (!strcmp(a, "--pads")) o->pads = atoi(v);
+		else if (!strcmp(a, "--instruction-ps")) o->instruction_ps = atoll(v);
+		else if (!strcmp(a, "--yield-ns")) o->yield_ns = atoll(v);
 		else if (!strcmp(a, "--renderer")) o->renderer = v;
 		else if (!strcmp(a, "--save-state")) o->save_state = v;
 		else if (!strcmp(a, "--state")) o->state = v;
@@ -119,8 +131,9 @@ static int harness_parse(int argc, char **argv, int first, struct harness_opts *
 /* The settings a runner hands the core, as the frontend would. */
 static void harness_settings(const struct harness_opts *o, char *out, size_t size)
 {
-	snprintf(out, size, "{\"renderer\":\"%s\",\"pads\":\"%d\",\"log\":\"%d\",\"trace_schedule\":\"%d\"}",
-	         o->renderer, o->pads, o->log, o->trace_schedule);
+	snprintf(out, size, "{\"renderer\":\"%s\",\"pads\":\"%d\",\"log\":\"%d\",\"trace_schedule\":\"%d\","
+	         "\"instruction_ps\":\"%lld\",\"yield_ns\":\"%lld\"}",
+	         o->renderer, o->pads, o->log, o->trace_schedule, o->instruction_ps, o->yield_ns);
 }
 
 static uint64_t harness_hash(uint64_t h, const void *data, size_t bytes)
@@ -271,6 +284,56 @@ static int harness_run(const struct harness_core *c, const struct harness_opts *
 		}
 		if (o->every && f % o->every == 0 && f != o->frames)
 			harness_line(c, &s, "at");
+		if (o->pace && o->every && f % o->every == 0) {
+			static struct timespec then;
+			static uint64_t then_instructions, then_switches;
+			struct timespec now;
+			clock_gettime(CLOCK_MONOTONIC, &now);
+			const uint64_t instructions = c->GetInstructionCount(), switches = c->GetSwitchCount();
+			if (then.tv_sec) {
+				const double host = (double)(now.tv_sec - then.tv_sec) + (double)(now.tv_nsec - then.tv_nsec) / 1e9;
+				const double machine = (double)o->every / 60.0;
+				fprintf(stderr, "pace frames %" PRIu64 "-%" PRIu64 ": %.2f host s for %.2f s (%.1fx), %.0f M instructions (%.0f M a host second), %" PRIu64 " handings over\n",
+				        f - o->every + 1, f, host, machine, host / machine,
+				        (double)(instructions - then_instructions) / 1e6,
+				        (double)(instructions - then_instructions) / 1e6 / host, switches - then_switches);
+			}
+			/* and who ran them: the four threads that ran the most in this
+			 * stretch (a thread is known by its id; the count before is kept
+			 * by id) */
+			{
+				static uint64_t before[4096];
+				struct { uint64_t delta; char name[96]; } top[4] = { { 0, "" }, { 0, "" }, { 0, "" }, { 0, "" } };
+				const char *text = c->DebugInstructionsByThread();
+				while (text && *text) {
+					unsigned id = 0;
+					unsigned long long count = 0;
+					char name[96] = "";
+					if (sscanf(text, "%u %llu %95[^\n]", &id, &count, name) >= 2 && id < 4096) {
+						const uint64_t delta = count - before[id];
+						before[id] = count;
+						for (int k = 0; k < 4; k++)
+							if (delta > top[k].delta) {
+								for (int m = 3; m > k; m--)
+									top[m] = top[m - 1];
+								top[k].delta = delta;
+								snprintf(top[k].name, sizeof top[k].name, "%s", name);
+								break;
+							}
+					}
+					text = strchr(text, '\n');
+					if (text)
+						text++;
+				}
+				if (then.tv_sec)
+					fprintf(stderr, "pace   most: %.0f M %s | %.0f M %s | %.0f M %s | %.0f M %s\n",
+					        (double)top[0].delta / 1e6, top[0].name, (double)top[1].delta / 1e6, top[1].name,
+					        (double)top[2].delta / 1e6, top[2].name, (double)top[3].delta / 1e6, top[3].name);
+			}
+			then = now;
+			then_instructions = instructions;
+			then_switches = switches;
+		}
 		if (o->ppm && f == (o->ppm_at ? o->ppm_at : o->frames))
 			harness_ppm(c, o->ppm);
 		if (o->save_state && f == o->save_at) {

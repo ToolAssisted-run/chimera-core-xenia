@@ -176,6 +176,18 @@ CORE_EXPORT int Init(void) {
   }
   options.log = json_string(settings, "log") == "1";
   options.trace_schedule = json_string(settings, "trace_schedule") == "1";
+  options.instruction_ps = std::atoll(json_string(settings, "instruction_ps").c_str());
+  // CPU Speed: millions of instructions a second for the whole console
+  const std::string cpu_speed = json_string(settings, "cpu_speed");
+  if (!cpu_speed.empty()) {
+    const long long mips = std::atoll(cpu_speed.c_str());
+    if (mips != 500 && mips != 1000 && mips != 2000 && mips != 4000) {
+      g_error = "no such CPU speed: " + cpu_speed;
+      return 0;
+    }
+    options.instruction_ps = 1000000 / mips;
+  }
+  options.yield_ns = std::atoll(json_string(settings, "yield_ns").c_str());
   if (options.renderer == "vulkan" && !g_bridge) {
     g_error = "the Vulkan renderer needs a device, and none was handed over (this machine may have no Vulkan, or "
               "this frontend no Vulkan bridge)";
@@ -304,6 +316,14 @@ CORE_EXPORT const uint8_t* ReadBus(int32_t bus, int64_t addr, int32_t len) {
 CORE_EXPORT uint64_t GetFrameCount(void) { return chimera_xenia::frames(); }
 CORE_EXPORT uint64_t GetMachineTimeNs(void) { return chimera_xenia::time_ns(); }
 CORE_EXPORT uint64_t GetSwitchCount(void) { return chimera_xenia::switches(); }
+CORE_EXPORT uint64_t GetInstructionCount(void) { return chimera_xenia::instructions(); }
+// The same by thread, as text ("<id> <count> <name>" a line): where the
+// machine's time goes, for a person.
+CORE_EXPORT const char* DebugInstructionsByThread(void) {
+  static std::string text;
+  text = chimera_xenia::instructions_by_thread();
+  return text.c_str();
+}
 CORE_EXPORT uint64_t GetGpuCounter(void) { return chimera_xenia::gpu_counter(); }
 // A digest of the console's 512 MiB, for the gate.
 CORE_EXPORT uint64_t GetRamDigest(void) { return chimera_xenia::ram_digest(); }

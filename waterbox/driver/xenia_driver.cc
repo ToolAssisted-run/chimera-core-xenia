@@ -447,6 +447,7 @@ bool boot(const std::string& program, const Options& options, std::string& error
   cvars::log_file = "chimera.log";
   cvars::log_to_stdout = options.log;
   xe::chimera::g_trace_schedule = options.trace_schedule;
+  xe::chimera::SetCosts(options.instruction_ps, options.yield_ns);
   xe::InitializeLogging("chimera");
 
   g_machine = new Machine();
@@ -653,6 +654,8 @@ const int16_t* audio(int& pairs) {
 uint64_t frames() { return g_machine ? g_machine->frames : 0; }
 uint64_t time_ns() { return static_cast<uint64_t>(xe::chimera::VirtualNanoseconds()); }
 uint64_t switches() { return xe::chimera::Switches(); }
+uint64_t instructions() { return xe::chimera::Instructions(); }
+std::string instructions_by_thread() { return xe::chimera::InstructionsByThread(); }
 uint64_t gpu_counter() {
   if (!g_machine) {
     return 0;

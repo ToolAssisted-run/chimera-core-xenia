@@ -18,9 +18,10 @@ to the picture it would have had. As a package it runs in the frontend's
 headless runner, on Linux on a software Vulkan and on Windows on a GeForce
 GTX 1060, where the one game there is goes from its title screen through
 its menus to "New Game", driven by a movie. It has a profile that is always
-signed in and storage in the machine's own memory; what a game saves there
-cannot be taken out yet. It runs at about a ninth of real time. Nothing is
-published, and the frontend's half is a branch. This file is the survey,
+signed in and storage in the machine's own memory, which the frontend can export. On the card the title
+screen runs at a third of real time at the default CPU speed (a setting:
+the game never waits, so the machine's clock is what the host pays for).
+Nothing is published, and the frontend's half is a branch. This file is the survey,
 the route, and what each step measured.
 
 ## The pin
@@ -770,12 +771,8 @@ notice, which would have ended the machine at the first achievement).
 to save to. Upstream keeps both in directories of the host, and a guest has
 none. See the next section.
 
-**Speed.** Forty seconds of the machine in 373: about a ninth of real time,
-on a logo and a title screen, with a screenshot every five seconds. Nothing
-has been measured about where it goes. The first suspects are the ones the
-RPCS3 and Vita3K cores had: what an instruction is charged (250 ps is a
-guess that makes the host run four billion guest instructions a second of
-the machine's time), and how often the baton is handed over.
+**Speed** was a ninth of real time on that run. Where it went is its own
+section, below.
 
 ## Storage, and somebody signed in (2026-10-10)
 
@@ -822,6 +819,67 @@ that to copy, and it needs a zip reader this core does not link yet.
 **Not done.** Nobody has played past the menu, so no level has been drawn
 and no game has been seen to save. The profile's name and identity are
 fixed and are not settings.
+
+## Speed: what the machine's clock costs the host (2026-10-10)
+
+The first runs on the card were ten to twelve times slower than real time
+from the title screen on. Measured before anything was changed, natively,
+with the renderer that draws nothing (`run-frames --every 300 --pace`,
+which writes for each stretch the host's seconds, the guest's instructions,
+the handings over, and the four threads that ran the most):
+
+| stretch (5 s of the machine each) | host seconds | guest instructions | who |
+| --- | --- | --- | --- |
+| the logos | 4.5 to 6.7 | 1.9 to 2.1 thousand million | one thread, nearly all of it |
+| the title screen and the menus | 52 | 18.5 thousand million | the same thread, 17.4 of them |
+| loading, the opening, the first rooftop | 5 | 2.6 thousand million | the same thread |
+
+And the same sixty seconds at other costs of an instruction:
+
+| an instruction costs | instructions the machine runs a second | host seconds for 70 s of the machine | pictures the game presents |
+| --- | --- | --- | --- |
+| 250 ps | 4,000 million | about 370 | 30 a second throughout |
+| 1000 ps | 1,000 million | 139 | 30 a second; the first logos come later |
+| 2000 ps | 500 million | 76 | 30 a second once started; it starts much later |
+| 4000 ps | 250 million | 32 | the title is reached 40 seconds in |
+
+Three things follow.
+
+- **The host runs 0.3 to 0.57 thousand million guest instructions a
+  second**, one thread at a time. That is the ceiling: a second of the
+  machine in which the program runs N of them costs N over that.
+- **This game never waits.** One thread - the one that plays the movies,
+  polls the pad and starts the others: its main loop - runs flat out between
+  frames, in whole slices with no call into the kernel. Whatever the clock
+  allows in a second, it takes. So the host's cost is the clock's rate and
+  nothing else, and the game's own work is a few percent of it: it holds
+  its thirty pictures a second on a quarter of the processor.
+- **The card is not the cost, nor is Windows.** Six hundred frames at the
+  logos take 7.1 s in the sandbox on Linux with nothing drawn, 8.2 with
+  llvmpipe, 8.3 on Windows with nothing drawn and 9.0 on the GeForce GTX
+  1060. The bridge's own count (`CHIMERA_VK_STATS=1`, miniBox) for fifty
+  seconds at the title: 2.07 million calls, 2.2 s in the host half and the
+  driver together.
+
+So the rate of the clock is a setting of the core, **CPU Speed**: the
+millions of instructions the console's processor runs in a second, all six
+threads together - 500, 1000 (the default), 2000 or 4000. It is part of the
+machine: a movie made at one does not play at another. The scheduler's own
+default moved from 250 ps to 1000 with it. At the default, on the card:
+fifty seconds from power on to the title screen in 149; ninety seconds
+through the menus, the loading and the game's animated opening in 226 -
+two and a half host seconds for one of the machine's, where it was ten to
+twelve - and for those ninety seconds the bridge counts 1.93 million calls
+and 2.7 s in itself and the driver.
+
+What this is not: a model of the console. One clock for six hardware
+threads is one processor shared, where the console has three cores; a
+thread that spins on the console burns one of six, and here it burns the
+clock. A scheduler with a clock for each thread would let the spinner cost
+what it costs the console - which, at one thread's real rate, is still more
+than this host runs in a second. And nothing knows what the main thread is
+waiting for; if it is the vertical blank, a wait that could be named could
+be made to cost nothing.
 
 ## The gate (2026-10-10)
 

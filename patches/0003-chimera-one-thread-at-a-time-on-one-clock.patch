@@ -282,10 +282,10 @@ index 000000000..563a386a3
 +#endif  // XENIA_BASE_CHIMERA_SYNC_H_
 diff --git a/src/xenia/base/chimera_vsched.h b/src/xenia/base/chimera_vsched.h
 new file mode 100644
-index 000000000..8cffead15
+index 000000000..c77e03a76
 --- /dev/null
 +++ b/src/xenia/base/chimera_vsched.h
-@@ -0,0 +1,75 @@
+@@ -0,0 +1,86 @@
 +// chimera: the one clock, and what moves it (threading_chimera.cc).
 +#ifndef XENIA_BASE_CHIMERA_VSCHED_H_
 +#define XENIA_BASE_CHIMERA_VSCHED_H_
@@ -293,6 +293,7 @@ index 000000000..8cffead15
 +#include <chrono>
 +#include <cstdint>
 +#include <functional>
++#include <string>
 +
 +namespace xe {
 +namespace chimera {
@@ -328,6 +329,16 @@ index 000000000..8cffead15
 +
 +// How many times the baton has been handed over.
 +uint64_t Switches();
++// How many guest instructions have been charged for.
++uint64_t Instructions();
++// The same by thread, for the threads there are now: "<id> <count> <name>" a
++// line. For a person asking where the machine's time goes.
++std::string InstructionsByThread();
++
++// What an instruction costs, in picoseconds, and what a wait or a yield
++// costs, in nanoseconds: the two numbers that say how fast the machine is.
++// Zero leaves one as it is. Before the machine runs, and never after.
++void SetCosts(int64_t instruction_ps, int64_t yield_ns);
 +
 +// For finding where two runs part: every time a thread gives the baton up -
 +// which one, how, when - on standard error.
@@ -740,10 +751,10 @@ index a0cae20e2..029311833 100644
  
 diff --git a/src/xenia/base/threading_chimera.cc b/src/xenia/base/threading_chimera.cc
 new file mode 100644
-index 000000000..2e3156a6c
+index 000000000..22f238dd4
 --- /dev/null
 +++ b/src/xenia/base/threading_chimera.cc
-@@ -0,0 +1,968 @@
+@@ -0,0 +1,1002 @@
 +// chimera: the threading layer on one clock.
 +//
 +// Upstream's threads are the host's, and time is the host's. Here every
@@ -794,7 +805,8 @@ index 000000000..2e3156a6c
 +// How many guest instructions a thread runs before the next one gets a turn.
 +constexpr int64_t kSliceInstructions = 100000;
 +// What asking the scheduler for anything costs the asker.
-+constexpr int64_t kYieldCostNs = 1000;
++// what a wait or a yield costs; a number, so that a core can try another
++int64_t kYieldCostNs = 1000;
 +
 +struct VThread;
 +
@@ -816,6 +828,7 @@ index 000000000..2e3156a6c
 +  bool go = false;
 +
 +  uint32_t id = 0;
++  uint64_t instructions = 0;  // charged to this thread so far
 +  uint32_t logical_id = 0;  // set_current_thread_id
 +  std::string name;
 +  std::function<void()> start;
@@ -857,15 +870,23 @@ index 000000000..2e3156a6c
 +// What a guest instruction costs, in picoseconds. One number for the whole
 +// machine: every thread's instructions move the one clock, so this is the
 +// reciprocal of everything the console's six hardware threads do in a
-+// second. CHIMERA_INSTRUCTION_PS changes it, for a test to see that it
-+// matters.
++// second - a thousand million instructions, unless the core says otherwise
++// (SetCosts; its CPU Speed setting). It is also what the host has to execute
++// for every second of the machine's time when a program never waits, and a
++// program that spins between frames never does. CHIMERA_INSTRUCTION_PS
++// changes it, for a test to see that it matters.
++int64_t g_instruction_picoseconds_set = 0;
++uint64_t g_instructions_total = 0;
 +int64_t InstructionPicoseconds() {
++  if (g_instruction_picoseconds_set > 0) {
++    return g_instruction_picoseconds_set;
++  }
 +  static int64_t value = 0;
 +  if (!value) {
 +    const char* text = std::getenv("CHIMERA_INSTRUCTION_PS");
-+    value = text && *text ? std::strtoll(text, nullptr, 10) : 250;
++    value = text && *text ? std::strtoll(text, nullptr, 10) : 1000;
 +    if (value <= 0) {
-+      value = 250;
++      value = 1000;
 +    }
 +  }
 +  return value;
@@ -878,6 +899,10 @@ index 000000000..2e3156a6c
 +  const int64_t used = kSliceInstructions - chimera::g_instruction_budget;
 +  chimera::g_instruction_budget = kSliceInstructions;
 +  if (used > 0) {
++    g_instructions_total += static_cast<uint64_t>(used);
++    if (S().current) {
++      S().current->instructions += static_cast<uint64_t>(used);
++    }
 +    const int64_t ps = used * InstructionPicoseconds() + g_picosecond_remainder;
 +    S().now += ps / 1000;
 +    g_picosecond_remainder = ps % 1000;
@@ -1686,6 +1711,26 @@ index 000000000..2e3156a6c
 +}
 +
 +uint64_t Switches() { return threading::S().switches; }
++uint64_t Instructions() { return threading::g_instructions_total; }
++std::string InstructionsByThread() {
++  std::string out;
++  for (const threading::VThread* t : threading::S().threads) {
++    char line[160];
++    std::snprintf(line, sizeof(line), "%u %llu %s\n", t->id,
++                  static_cast<unsigned long long>(t->instructions),
++                  t->name.c_str());
++    out += line;
++  }
++  return out;
++}
++void SetCosts(int64_t instruction_ps, int64_t yield_ns) {
++  if (instruction_ps > 0) {
++    threading::g_instruction_picoseconds_set = instruction_ps;
++  }
++  if (yield_ns > 0) {
++    threading::kYieldCostNs = yield_ns;
++  }
++}
 +
 +bool WaitFor(const std::function<bool()>& ready, int64_t deadline_ns) {
 +  if (ready()) {
