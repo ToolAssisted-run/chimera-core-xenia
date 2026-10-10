@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "machine_settings.h"
+#include "memfs.h"
 
 #ifdef CHIMERA_GUEST
 #include "vk-bridge.h"
@@ -36,6 +37,9 @@
 #include "xenia/gpu/vulkan/vulkan_graphics_system.h"
 #include "xenia/hid/input_driver.h"
 #include "xenia/hid/input_system.h"
+#include "xenia/kernel/kernel_state.h"
+#include "xenia/kernel/xam/profile_manager.h"
+#include "xenia/kernel/xam/xam_state.h"
 #include "xenia/memory.h"
 #include "xenia/ui/presenter.h"
 #include "xenia/ui/virtual_key.h"
@@ -90,6 +94,10 @@ struct Machine {
   int video_width = 0, video_height = 0;
 };
 Machine* g_machine = nullptr;
+
+// The machine's calendar, for its filesystem: it is switched on at
+// 2010-01-01 00:00:00 UTC, as the scheduler has it.
+int64_t machine_seconds() { return 1262304000 + xe::chimera::VirtualNanoseconds() / 1000000000; }
 
 // Which device the renderer's calls land on: the bridge's context in the
 // sandbox, where every load makes another; natively there is only ever one.
@@ -448,11 +456,16 @@ bool boot(const std::string& program, const Options& options, std::string& error
     m.pads[i].connected = i < options.pads;
   }
 
-  // The emulator's own roots - its storage, its content, its cache - are
-  // names nothing is under: the program is what it was given and nothing is
-  // kept from one run to the next.
-  const std::filesystem::path work = "work";
-  m.emulator = std::make_unique<xe::Emulator>("", work, work / "content", work / "cache");
+  // The emulator's own roots - its storage, its content (profiles, saved
+  // games), its cache - are in the machine's own filesystem, which is memory:
+  // the same in a sandbox and out of one, kept by every savestate, and empty
+  // when the machine is switched on.
+  chimera::memfs::set_clock(machine_seconds);
+  const std::filesystem::path work = std::string(chimera::memfs::ROOT);
+  for (const char* directory : {"storage", "content", "cache"}) {
+    chimera::memfs::mkdirs((work / directory).string());
+  }
+  m.emulator = std::make_unique<xe::Emulator>("", work / "storage", work / "content", work / "cache");
   const bool vulkan = options.renderer == "vulkan";
   m.vulkan = vulkan;
   xe::X_STATUS status = m.emulator->Setup(
@@ -477,6 +490,16 @@ bool boot(const std::string& program, const Options& options, std::string& error
     error = text;
     return false;
   }
+  // One profile, always the same one, always signed in on the first pad: a
+  // game that will not save - or will not start - without somebody signed in
+  // has somebody. (Upstream's own fixed identity for a default profile.)
+  if (auto* profiles = m.emulator->kernel_state()->xam_state()->profile_manager()) {
+    if (!profiles->CreateProfile("Player", true, true)) {
+      error = "the console's profile could not be made";
+      return false;
+    }
+  }
+
   m.device = device_now();
   status = m.emulator->LaunchPath(program);
   if (XFAILED(status)) {

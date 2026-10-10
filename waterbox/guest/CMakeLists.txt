@@ -24,9 +24,10 @@ xe_target_defaults(xenia-guest-ppc)
 add_library(xenia-guest-core STATIC
   ${CMAKE_CURRENT_SOURCE_DIR}/../driver/xenia_driver.cc
   ${CMAKE_CURRENT_SOURCE_DIR}/../driver/wbx-entry.cc
+  ${CMAKE_CURRENT_SOURCE_DIR}/../driver/memfs.cc
   ${CMAKE_CURRENT_SOURCE_DIR}/guest-libc.cc
 )
-target_compile_definitions(xenia-guest-core PRIVATE XBYAK_NO_OP_NAMES XBYAK_ENABLE_OMITTED_OPERAND)
+target_compile_definitions(xenia-guest-core PRIVATE XBYAK_NO_OP_NAMES XBYAK_ENABLE_OMITTED_OPERAND CHIMERA_MEMFS=1)
 # vk-bridge.h only: the bridge's own Vulkan headers are not Xenia's
 target_include_directories(xenia-guest-core PRIVATE $ENV{MINIBOX_DIR}/source/vk)
 target_link_libraries(xenia-guest-core PUBLIC

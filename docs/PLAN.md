@@ -16,10 +16,11 @@ draws through miniBox's Vulkan bridge the pictures the native build draws,
 and loads a state with that renderer - on a new device, in another process -
 to the picture it would have had. As a package it runs in the frontend's
 headless runner, on Linux on a software Vulkan and on Windows on a GeForce
-GTX 1060, where the one game there is reaches its title screen and answers
-the Start button. It stops there: the game asks to sign in, and there is no
-profile and nowhere to save. It runs at about a ninth of real time. Nothing
-is published, and the frontend's half is a branch. This file is the survey,
+GTX 1060, where the one game there is goes from its title screen through
+its menus to "New Game", driven by a movie. It has a profile that is always
+signed in and storage in the machine's own memory; what a game saves there
+cannot be taken out yet. It runs at about a ninth of real time. Nothing is
+published, and the frontend's half is a branch. This file is the survey,
 the route, and what each step measured.
 
 ## The pin
@@ -728,11 +729,9 @@ first draft had a list.
 **Not established.** The interface: only the headless runner has opened the
 package. Windows, where the owner's card is: the engine branch compiles for
 it and has not run there. A project (the wizard's form has not been looked
-at). Save data: the emulator's storage and content roots are names nothing
-is under, so a game that saves writes nowhere - and a game that will not
-start without a profile or a storage device will not start. The network: a
-game that opens a socket would end the machine (a guest may not), and
-nothing answers "there is no network" for it yet. The licence list was
+at). Save data in and out (see "Storage" below). The network: miniBox
+answers a socket with an error, which is what "there is no network" needs,
+but no game that asks has been run. The licence list was
 written from the tree and has not been reviewed; nothing may be published
 on it as it stands.
 
@@ -767,13 +766,9 @@ when there is no window, and "closed" is said by a thread of the machine's,
 on the machine's clock (patch 0002, with the same guard for an achievement's
 notice, which would have ended the machine at the first achievement).
 
-**What the game wants next** is what this core does not have: a profile to
-be signed in as, and storage for it to save to. Upstream keeps both in
-directories of the host, and a guest has none. That is the next piece of
-work - the emulator's storage in the machine's own memory (the Vita3K core
-has one to copy), with one profile that is always signed in - and until it
-exists a game stops where this one stops, or runs without saving if it
-lets you decline.
+**What the game wanted next** was a profile to be signed in as and storage
+to save to. Upstream keeps both in directories of the host, and a guest has
+none. See the next section.
 
 **Speed.** Forty seconds of the machine in 373: about a ninth of real time,
 on a logo and a title screen, with a screenshot every five seconds. Nothing
@@ -781,6 +776,47 @@ has been measured about where it goes. The first suspects are the ones the
 RPCS3 and Vita3K cores had: what an instruction is charged (250 ps is a
 guess that makes the host run four billion guest instructions a second of
 the machine's time), and how often the baton is handed over.
+
+## Storage, and somebody signed in (2026-10-10)
+
+The emulator's three roots - storage, content (profiles, saved games) and
+cache - are now a filesystem in the machine's own memory
+(`waterbox/driver/memfs.cc`, the Vita3K core's, where it was written and is
+tested, with two additions). It sits under the C library: every path under
+`/chimera` is served from a tree in memory, in both flavours of the core, so
+the native reference and the sandbox see the same files in the same order
+with the machine's own dates, and every savestate has them. It is empty when
+the machine is switched on.
+
+The two additions, both found by the sandbox ending the machine: the C
+library's `remove` makes its system calls itself and went past the tree
+(the C++ library's `std::filesystem::remove` is that call); and a path
+outside the tree, which in a sandbox can only be read, now answers "the disk
+cannot be written" to anything that would write, where it would have made a
+system call the sandbox does not have.
+
+One profile is made when the machine is switched on and signed in on the
+first pad: "Player", with upstream's own fixed identity for a default
+profile. A game that will not save, or will not start, without somebody
+signed in has somebody - the same somebody in every run.
+
+Measured: the native run and the sandbox still agree at every sixtieth
+frame (the console's memory is what it was; the schedule moved a little, a
+signed-in console being another console). And on the GeForce GTX 1060, a
+movie that presses Start at frame 1300 and A at 1600 and 1800:
+
+| frame | what the game shows |
+| --- | --- |
+| 1290 | the title screen, "Press START button" |
+| 1450, 1590 | its autosave notice: "Please choose device to store your game progress on" |
+| 1750 | the main menu: Story (New Game), Race, Options, Extras |
+| 1950, 2099 | Story - New Game: choose difficulty |
+
+**Not done.** What a game saves stays in the machine: nothing brings it
+out (the frontend's Export Save Data) or puts a save in before the game
+starts (a project's save slot); the Vita3K core has both to copy. Nobody
+has played past the menu, so no level has been drawn. The profile's name
+and identity are fixed and are not settings.
 
 ## The gate (2026-10-10)
 

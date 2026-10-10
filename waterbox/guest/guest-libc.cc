@@ -14,8 +14,11 @@
 
 extern "C" {
 
+#ifndef CHIMERA_MEMFS
 // A guest's files are the ones it was given, by name. Anything the emulator
 // would make, remove or rename on a disk is told the disk is read-only.
+// (The core has the machine's own filesystem under these calls instead:
+// waterbox/driver/memfs.cc.)
 int mkdir(const char*, mode_t) {
   errno = EROFS;
   return -1;
@@ -37,6 +40,7 @@ int chmod(const char*, mode_t) {
   return -1;
 }
 int fchmod(int, mode_t) { return 0; }
+#endif  // CHIMERA_MEMFS
 
 // There is one directory and it is the root.
 char* getcwd(char* buf, size_t size) {
