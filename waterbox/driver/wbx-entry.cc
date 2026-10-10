@@ -224,6 +224,15 @@ CORE_EXPORT int GetAudioSampleCount(void) {
   return pairs;
 }
 
+// The frontend says a savestate is about to be made (its engine calls this
+// before every one): what only the graphics device holds is brought into
+// the machine, where the state will find it.
+CORE_EXPORT void StateSaving(void) { chimera_xenia::state_saving(); }
+
+// For the gate: the renderer made again on a new device before the next
+// frame, as after a load.
+CORE_EXPORT void RemakeRenderer(void) { chimera_xenia::remake_renderer(); }
+
 CORE_EXPORT int InputWasRead(void) { return chimera_xenia::input_was_read() ? 1 : 0; }
 
 // No memory domain. The console's 512 MiB are one block that never moves,

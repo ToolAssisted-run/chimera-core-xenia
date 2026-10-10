@@ -3,7 +3,9 @@
 An Xbox 360 core for [Chimera](https://github.com/ToolAssisted-run/chimera),
 built on [Xenia Canary](https://github.com/xenia-canary/xenia-canary). Work
 in progress: it runs a game in the sandbox a frame at a time, the same way
-every time, with pads, sound and savestates and no picture yet.
+every time, with pads, sound, a picture drawn through Chimera's Vulkan
+bridge, and savestates that keep it. It is not yet a package the frontend
+opens.
 `docs/PLAN.md` has what was found in the source, the route, and what each
 step measured.
 

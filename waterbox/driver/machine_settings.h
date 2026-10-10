@@ -15,6 +15,7 @@
 DECLARE_bool(emit_inline_mmio_checks);
 DECLARE_bool(disable_instruction_infocache);
 DECLARE_bool(store_shaders);
+DECLARE_int32(vulkan_pipeline_creation_threads);
 
 namespace chimera_xenia {
 
@@ -46,6 +47,13 @@ inline bool apply_machine_settings(std::string& error) {
   // thread of its own to write them, so that a machine with somewhere to
   // write was not the machine without.
   cvars::store_shaders = false;
+
+  // Pipelines are made by the thread that needs them. Upstream has threads
+  // for it, which in a sandbox are no faster (one thread runs at a time) and
+  // which a renderer made again on another device would have to end and
+  // start again - and a thread started later is a thread in another place
+  // in the order, which is another machine.
+  cvars::vulkan_pipeline_creation_threads = 0;
 
   const uint64_t have = xe::amd64::GetFeatureFlags();
   const uint64_t need = xe::amd64::kX64EmitAVX2 | xe::amd64::kX64EmitFMA;

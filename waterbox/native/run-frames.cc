@@ -28,6 +28,8 @@ uint64_t GetSwitchCount(void);
 uint64_t GetGpuCounter(void);
 uint64_t GetRamDigest(void);
 const uint8_t* ReadBus(int32_t, int64_t, int32_t);
+void RemakeRenderer(void);
+void StateSaving(void);
 uint32_t* GetVideoBgra(void);
 int GetVideoWidth(void);
 int GetVideoHeight(void);
@@ -70,7 +72,7 @@ int main(int argc, char** argv) {
   }
   const struct harness_core core = {
       Init,          GetLoadError,        SetAxis,          FrameAdvance,   InputWasRead,       GetAudio,
-      GetAudioSampleCount, GetMachineTimeNs, GetSwitchCount, GetGpuCounter, GetRamDigest, ReadBus,
+      GetAudioSampleCount, GetMachineTimeNs, GetSwitchCount, GetGpuCounter, GetRamDigest, ReadBus, RemakeRenderer, StateSaving,
       GetVideoBgra,  GetVideoWidth,       GetVideoHeight,
       nullptr,       nullptr,             nullptr,
   };

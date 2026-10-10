@@ -47,6 +47,16 @@ const uint32_t* video(int& width, int& height);
 // fast-forward). The machine draws all the same.
 void set_rendering(bool on);
 
+// The renderer made again on a new device before the next frame, as it is
+// after a savestate is loaded - asked for by hand, so that the gate can see
+// that it changes nothing. Nothing with the renderer that draws nothing.
+void remake_renderer();
+
+// A savestate is about to be made of the machine as it stands: what only
+// the graphics device holds is fetched into the machine, so that the state
+// has it. Nothing with the renderer that draws nothing.
+void state_saving();
+
 // Whether the program asked for a pad's state during the last frame.
 bool input_was_read();
 

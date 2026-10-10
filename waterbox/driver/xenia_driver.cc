@@ -17,6 +17,10 @@
 
 #include "machine_settings.h"
 
+#ifdef CHIMERA_GUEST
+#include "vk-bridge.h"
+#endif
+
 #include "xenia/apu/audio_driver.h"
 #include "xenia/apu/audio_system.h"
 #include "xenia/base/byte_order.h"
@@ -70,6 +74,15 @@ struct Machine {
   std::vector<int32_t> mix;
   std::vector<int16_t> audio;
   int audio_pairs = 0;
+  // whether the last frame ended with the renderer's thread parked where
+  // the renderer can be made again
+  bool renderer_quiet = false;
+  // the device the renderer's objects were made on; zero natively
+  uint64_t device = 0;
+  // make the renderer again: because it was asked, or because the device is
+  // another one (and then the old one answers nothing)
+  bool remake = false;
+  bool remake_device_gone = false;
   // the last picture read back
   bool vulkan = false;
   bool rendering = true;
@@ -77,6 +90,16 @@ struct Machine {
   int video_width = 0, video_height = 0;
 };
 Machine* g_machine = nullptr;
+
+// Which device the renderer's calls land on: the bridge's context in the
+// sandbox, where every load makes another; natively there is only ever one.
+uint64_t device_now() {
+#ifdef CHIMERA_GUEST
+  return chimera_vk_context_id();
+#else
+  return 0;
+#endif
+}
 
 // ---- the pads -------------------------------------------------------------
 
@@ -454,6 +477,7 @@ bool boot(const std::string& program, const Options& options, std::string& error
     error = text;
     return false;
   }
+  m.device = device_now();
   status = m.emulator->LaunchPath(program);
   if (XFAILED(status)) {
     char text[64];
@@ -485,14 +509,74 @@ void set_pad(int port, uint16_t buttons, const int32_t* axes) {
   }
 }
 
+namespace {
+
+// The renderer made again, by the frame's own thread, while the renderer's
+// thread is parked with nothing half done.
+void remake_now() {
+  Machine& m = *g_machine;
+  const bool gone = m.remake_device_gone;
+  m.remake = false;
+  m.remake_device_gone = false;
+  m.emulator->graphics_system()->command_processor()->ChimeraRemakeContext(!gone);
+  m.device = device_now();
+}
+
+}  // namespace
+
+void state_saving() {
+  if (!g_machine || !g_machine->vulkan) {
+    return;
+  }
+  auto* cp = g_machine->emulator->graphics_system()->command_processor();
+  // only at a moment the renderer could be made again from; a frame nearly
+  // always ends at one
+  cp->ChimeraStateSaving(g_machine->renderer_quiet && cp->ChimeraQuiet() && !g_machine->remake);
+}
+
+void remake_renderer() {
+  if (g_machine && g_machine->vulkan) {
+    g_machine->remake = true;
+  }
+}
+
 void frame() {
   Machine& m = *g_machine;
   m.input_read = false;
+  auto* gs = m.emulator->graphics_system();
+  if (m.vulkan) {
+    // A savestate was loaded: the device is another one, and what the
+    // renderer holds names nothing on it.
+    if (device_now() != m.device) {
+      m.remake = true;
+      m.remake_device_gone = true;
+    }
+    // Made again before anybody runs, when the renderer's thread is where
+    // that can be done; when a frame next ends with it there, if it is not.
+    auto* cp = gs->command_processor();
+    if (m.remake && (cp->ChimeraQuiet() || !cp->ChimeraContextUp())) {
+      remake_now();
+    }
+  }
   const uint64_t f = m.frames + 1;
   // Two microseconds past the vertical blank: the thread that raises it has
   // been woken, and has raised it, by then.
-  xe::chimera::SleepUntil(xe::chimera::FrameBoundaryNs(static_cast<int64_t>(f)) + 2000);
+  const int64_t end = xe::chimera::FrameBoundaryNs(static_cast<int64_t>(f)) + 2000;
+  xe::chimera::SleepUntil(end);
   m.frames = f;
+  if (m.vulkan) {
+    // A frame ends with the renderer's thread parked where nothing of a draw
+    // is half done - between packets, or inside one that waits for the
+    // program - because a state saved now must be one the renderer can be
+    // made again from. It nearly always is there already. When it is not,
+    // the frame waits for it, for as long as a frame at most.
+    auto* cp = gs->command_processor();
+    m.renderer_quiet = xe::chimera::WaitFor([cp] { return cp->ChimeraQuiet(); },
+                                            xe::chimera::FrameBoundaryNs(static_cast<int64_t>(f) + 1));
+    if (m.remake && m.renderer_quiet) {
+      remake_now();
+    }
+  }
 
   const size_t pairs = m.mix.size() / 2;
   for (size_t i = 0; i < pairs * 2; i++) {
@@ -507,7 +591,6 @@ void frame() {
   // The picture: what the program last showed, copied out of the presenter's
   // image by the device. Asked from this thread while every other is parked.
   if (m.vulkan && m.rendering) {
-    auto* gs = m.emulator->graphics_system();
     xe::ui::Presenter* presenter = gs ? gs->presenter() : nullptr;
     xe::ui::RawImage image;
     if (presenter && presenter->CaptureGuestOutput(image) && image.width && image.height) {

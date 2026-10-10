@@ -14,6 +14,8 @@
  * --rerecord        a state saved and loaded before every frame (sandbox)
  * --save-state FILE --at F   after frame F, save a state to FILE and stop
  * --state FILE      carry on from a state another process saved
+ * --remake-every N  before every Nth frame the renderer is made again on a
+ *                   new device, as it is after a load
  * --ppm FILE [--ppm-at F]    the picture after frame F (the last one without
  *                   --ppm-at), as a file a person can look at
  */
@@ -39,6 +41,8 @@ struct harness_core {
 	uint64_t (*GetGpuCounter)(void);
 	uint64_t (*GetRamDigest)(void);
 	const uint8_t *(*ReadBus)(int32_t, int64_t, int32_t);
+	void (*RemakeRenderer)(void);
+	void (*StateSaving)(void);
 	uint32_t *(*GetVideoBgra)(void);
 	int (*GetVideoWidth)(void);
 	int (*GetVideoHeight)(void);
@@ -51,7 +55,7 @@ struct harness_core {
 #define HARNESS_MAX_EVENTS 64
 struct harness_event { uint64_t from, count; int index; int64_t value; uint64_t mask; };
 struct harness_opts {
-	uint64_t frames, every, save_at;
+	uint64_t frames, every, save_at, remake_every;
 	int rerecord, log, pads, trace_schedule;
 	const char *renderer, *save_state, *state, *ppm;
 	uint64_t ppm_at;
@@ -77,6 +81,7 @@ static int harness_parse(int argc, char **argv, int first, struct harness_opts *
 		if (!strcmp(a, "--frames")) o->frames = strtoull(v, NULL, 10);
 		else if (!strcmp(a, "--every")) o->every = strtoull(v, NULL, 10);
 		else if (!strcmp(a, "--at")) o->save_at = strtoull(v, NULL, 10);
+		else if (!strcmp(a, "--remake-every")) o->remake_every = strtoull(v, NULL, 10);
 		else if (!strcmp(a, "--pads")) o->pads = atoi(v);
 		else if (!strcmp(a, "--renderer")) o->renderer = v;
 		else if (!strcmp(a, "--save-state")) o->save_state = v;
@@ -218,6 +223,12 @@ static int harness_run(const struct harness_core *c, const struct harness_opts *
 		if (o->rerecord) {
 			uint8_t *buf = NULL;
 			size_t len = 0;
+			/* As the frontend's engine does before a save. The gate's
+			 * negative control leaves it out: a state made without it does
+			 * not have what only the graphics device held. */
+			const char *unasked = getenv("HARNESS_BREAK_NO_STATE_SAVING");
+			if (!(unasked && *unasked))
+				c->StateSaving();
 			if (!c->save(&buf, &len))
 				return 1;
 			/* the gate's negative control: once, half way, the state loaded
@@ -236,6 +247,8 @@ static int harness_run(const struct harness_core *c, const struct harness_opts *
 			before = buf;
 			before_len = len;
 		}
+		if (o->remake_every && f % o->remake_every == 0)
+			c->RemakeRenderer();
 		uint64_t buttons = 0;
 		for (int i = 0; i < o->presses; i++)
 			if (f >= o->press[i].from && f < o->press[i].from + o->press[i].count)
@@ -263,6 +276,7 @@ static int harness_run(const struct harness_core *c, const struct harness_opts *
 		if (o->save_state && f == o->save_at) {
 			uint8_t *buf = NULL;
 			size_t len = 0;
+			c->StateSaving();
 			if (!c->save(&buf, &len))
 				return 1;
 			FILE *out = fopen(o->save_state, "wb");

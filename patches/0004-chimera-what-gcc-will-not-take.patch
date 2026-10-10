@@ -38,7 +38,7 @@ index 7f135c0b8..ec0f97214 100644
  static void mvdir64b(void* to, const void* from) {
    __asm__("movdir64b %1, %0" : : "r"(to), "m"(*(char*)from) : "memory");
 diff --git a/src/xenia/gpu/command_processor.h b/src/xenia/gpu/command_processor.h
-index dfe42737f..53807a8ad 100644
+index dfe42737f..bd488d9d3 100644
 --- a/src/xenia/gpu/command_processor.h
 +++ b/src/xenia/gpu/command_processor.h
 @@ -20,6 +20,7 @@
@@ -58,7 +58,63 @@ index dfe42737f..53807a8ad 100644
    // Dimensions of the framebuffer textures. Should match window size.
    uint32_t width = 0;
    uint32_t height = 0;
-@@ -235,7 +236,9 @@ class CommandProcessor {
+@@ -173,6 +174,33 @@ class CommandProcessor {
+       uint32_t new_gamma_ramp_rw_component);
+   virtual void RestoreEdramSnapshot(const void* snapshot) = 0;
+ 
++  // chimera: the renderer made again on another device (command_processor.cc).
++  // While the worker is quiet (ChimeraQuiet), by whoever holds the baton.
++  void ChimeraRemakeContext(bool keep_device_state);
++  // chimera: a savestate is about to be made. What only the device holds is
++  // fetched, so that the state has it and a load can put it back. While the
++  // worker is quiet; `quiet` false says it is not, and then what was fetched
++  // earlier is forgotten instead - it is another moment's.
++  void ChimeraStateSaving(bool quiet) {
++    if (quiet) {
++      ChimeraSubmitAll();
++      ChimeraKeepDeviceState();
++    } else {
++      ChimeraForgetDeviceState();
++    }
++  }
++  // chimera: whether the worker is parked with nothing of a draw half done:
++  // between packets with nothing to read, or inside a packet that waits for
++  // the program. Only one thread runs at a time, so a thread that finds this
++  // true may use the renderer as the worker would - fetch what the device
++  // holds, make the context again - and the worker carries on from where it
++  // is parked none the wiser.
++  bool ChimeraQuiet() const { return chimera_quiet_; }
++  // chimera: whether the worker has set its context up yet. It does when it
++  // first runs, which is after the machine was switched on - and a savestate
++  // can be loaded in between.
++  bool ChimeraContextUp() const { return chimera_context_up_; }
++
+   void InitializeRingBuffer(uint32_t ptr, uint32_t size_log2);
+   void EnableReadPointerWriteBack(uint32_t ptr, uint32_t block_size_log2);
+ 
+@@ -224,6 +252,21 @@ class CommandProcessor {
+   void WorkerThreadMain();
+   virtual bool SetupContext() = 0;
+   virtual void ShutdownContext() = 0;
++
++  // chimera: what the device holds and the machine's memory does not - the
++  // render targets, what was resolved into memory - kept on this side, so
++  // that it can be put back on another device. Both between packets, on the
++  // worker thread, the first with every draw so far submitted.
++  virtual void ChimeraKeepDeviceState() {}
++  virtual void ChimeraPutBackDeviceState() {}
++  virtual void ChimeraForgetDeviceState() {}
++  // chimera: every draw recorded so far handed to the device.
++  virtual void ChimeraSubmitAll() {}
++  // chimera: what of this object was made for the device itself and outlives
++  // a context - let go before the device is, made again when there is
++  // another.
++  virtual void ChimeraLeaveDevice() {}
++  virtual void ChimeraEnterDevice() {}
+   // rarely needed, most register writes have no special logic here
+   XE_NOINLINE
+   void HandleSpecialRegisterWrite(uint32_t index, uint32_t value);
+@@ -235,7 +278,9 @@ class CommandProcessor {
    virtual void WriteRegistersFromMem(uint32_t start_index, uint32_t* base,
                                       uint32_t num_registers);
  
@@ -69,3 +125,12 @@ index dfe42737f..53807a8ad 100644
    virtual void WriteRegisterRangeFromRing(xe::RingBuffer* ring, uint32_t base,
                                            uint32_t num_registers);
  
+@@ -595,6 +640,8 @@ class CommandProcessor {
+   kernel::object_ref<kernel::XHostThread> worker_thread_;
+ 
+   std::queue<std::function<void()>> pending_fns_;
++  bool chimera_quiet_ = false;
++  bool chimera_context_up_ = false;
+ 
+   // MicroEngine binary from PM4_ME_INIT
+   std::vector<uint32_t> me_bin_;

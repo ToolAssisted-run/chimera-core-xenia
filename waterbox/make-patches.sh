@@ -24,6 +24,7 @@ series='
 0007-chimera-the-recompiler-from-the-memory-base|src/xenia/cpu/backend/code_cache_base.h src/xenia/cpu/backend/x64/x64_emitter.h src/xenia/cpu/backend/x64/x64_backend.cc
 0008-chimera-a-disc-image-that-is-read|src/xenia/vfs/devices/disc_image_device.h src/xenia/vfs/devices/disc_image_device.cc src/xenia/vfs/devices/disc_image_file.cc src/xenia/vfs/devices/disc_image_entry.cc
 0009-chimera-the-vulkan-loader-is-the-bridge|src/xenia/ui/vulkan/vulkan_instance.cc
+0010-chimera-the-renderer-on-another-device|src/xenia/gpu/command_processor.cc src/xenia/gpu/graphics_system.h src/xenia/gpu/vulkan/vulkan_graphics_system.h src/xenia/gpu/vulkan/vulkan_graphics_system.cc src/xenia/gpu/vulkan/vulkan_command_processor.h src/xenia/gpu/vulkan/vulkan_command_processor.cc src/xenia/gpu/vulkan/vulkan_render_target_cache.h src/xenia/gpu/vulkan/vulkan_render_target_cache.cc src/xenia/gpu/vulkan/vulkan_shared_memory.h src/xenia/gpu/vulkan/vulkan_shared_memory.cc src/xenia/gpu/shared_memory.h src/xenia/gpu/shared_memory.cc
 '
 
 # new files are part of the difference

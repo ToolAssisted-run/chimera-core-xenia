@@ -165,6 +165,50 @@ else
 	fi
 fi
 
+# The renderer on another device. A load is a new device (the bridge makes
+# it one), and everything the renderer made is gone with the old: it is made
+# again, and what only the device held - the console's render targets, what
+# it resolved into memory - is put back from the state. Three ways of asking
+# whether that is the renderer it was:
+#  - natively, with no state at all: made again before every seventh frame,
+#    the run is the run in which it never was;
+#  - in the sandbox, a state saved and loaded before every frame;
+#  - a state saved by one process and carried on by another.
+# All three against the native Vulkan run above, pictures included, at every
+# twentieth frame of a shorter run (a load with this renderer takes two
+# thirds of a second).
+short="${XENIA_GATE_SHORT_FRAMES:-120}"
+if [ "$have_native" = 0 ] || [ "$have_sandbox" = 0 ] || [ ! -s "$work/v.out" ]; then
+	why="$why_native"; [ "$have_native" = 1 ] && why="$why_sandbox"
+	[ "$have_native" = 1 ] && [ "$have_sandbox" = 1 ] && why="no Vulkan run to hold it to (picture:bridge did not run)"
+	report "picture:remade" SKIP "$why"
+	report "picture:every-frame" SKIP "$why"
+	report "picture:other-process" SKIP "$why"
+else
+	native m0 --frames "$short" --every 20 --renderer vulkan
+	native m1 --frames "$short" --every 20 --renderer vulkan --remake-every 7
+	moved="$(cut -d' ' -f12 "$work/m0.out" | sort -u | wc -l)"
+	if [ -s "$work/m0.out" ] && cmp -s "$work/m0.out" "$work/m1.out" && [ "$moved" -gt 2 ]; then
+		report "picture:remade" PASS "the renderer made again on a new device before every seventh of $short frames: $(last "$work/m1.out")"
+	else
+		report "picture:remade" FAIL "never [$(last "$work/m0.out")] every seventh frame [$(last "$work/m1.out")] $(tail -1 "$work/m1.err")"
+	fi
+	sandbox m2 --frames "$short" --every 20 --renderer vulkan --rerecord
+	if [ -s "$work/m0.out" ] && cmp -s "$work/m0.out" "$work/m2.out"; then
+		report "picture:every-frame" PASS "a state saved and loaded before each of $short frames, each load a new device: $(last "$work/m2.out")"
+	else
+		report "picture:every-frame" FAIL "unbroken [$(last "$work/m0.out")] with states [$(last "$work/m2.out")] $(tail -1 "$work/m2.err")"
+	fi
+	at=$((short / 2 + 3))
+	sandbox m3 --frames "$short" --renderer vulkan --save-state "$work/picture.state" --at "$at"
+	sandbox m4 --frames "$short" --every 20 --renderer vulkan --state "$work/picture.state"
+	if [ -s "$work/m4.out" ] && [ "$(last "$work/m4.out")" = "$(last "$work/m0.out")" ]; then
+		report "picture:other-process" PASS "saved after frame $at ($(sed -n 's/^state: \([0-9]*\) bytes.*/\1/p' "$work/m3.err") bytes), loaded by another process on its own device, it ends with the unbroken run's picture"
+	else
+		report "picture:other-process" FAIL "unbroken [$(last "$work/m0.out")] carried on [$(last "$work/m4.out")] $(tail -1 "$work/m4.err")"
+	fi
+fi
+
 # Upstream's instruction tests in the sandbox: the tests that fail are the
 # tests that fail natively, and no others. A part of them - every so-manieth
 # file, in the order of their names - because a new recompiler is made for

@@ -1,0 +1,613 @@
+diff --git a/src/xenia/gpu/command_processor.cc b/src/xenia/gpu/command_processor.cc
+index eadd8f5d1..c900844f9 100644
+--- a/src/xenia/gpu/command_processor.cc
++++ b/src/xenia/gpu/command_processor.cc
+@@ -338,6 +338,59 @@ void CommandProcessor::CallInThread(std::function<void()> fn) {
+ 
+ void CommandProcessor::ClearCaches() {}
+ 
++// chimera: the device is another one. A savestate was loaded, and everything
++// this renderer made belongs to a device that is gone - or the gate asks,
++// to see that it changes nothing. The context is taken down, the provider
++// and the presenter are made again, and the context is set up on what they
++// are now. The shaders in use belonged to the context and are loaded again
++// from their own code.
++//
++// keep_device_state: the device being left still answers, so what only it
++// holds is fetched first. After a load it does not, and what was fetched
++// before the state was saved is what is put back.
++void CommandProcessor::ChimeraRemakeContext(bool keep_device_state) {
++  if (!chimera_context_up_) {
++    // Nothing to take down: the worker has not been here yet, and will set
++    // its context up on whatever device there is when it first runs.
++    ChimeraLeaveDevice();
++    graphics_system_->ChimeraRemakeDevice();
++    ChimeraEnterDevice();
++    return;
++  }
++  if (keep_device_state) {
++    ChimeraSubmitAll();
++    ChimeraKeepDeviceState();
++  }
++  std::vector<uint32_t> vertex_ucode, pixel_ucode;
++  if (active_vertex_shader_) {
++    vertex_ucode = active_vertex_shader_->ucode_data();
++  }
++  if (active_pixel_shader_) {
++    pixel_ucode = active_pixel_shader_->ucode_data();
++  }
++  ShutdownContext();
++  active_vertex_shader_ = nullptr;
++  active_pixel_shader_ = nullptr;
++  ChimeraLeaveDevice();
++  graphics_system_->ChimeraRemakeDevice();
++  ChimeraEnterDevice();
++  if (!SetupContext()) {
++    xe::FatalError("Unable to set the command processor up on a new device");
++    return;
++  }
++  if (!vertex_ucode.empty()) {
++    active_vertex_shader_ =
++        LoadShader(xenos::ShaderType::kVertex, 0, vertex_ucode.data(),
++                   uint32_t(vertex_ucode.size()));
++  }
++  if (!pixel_ucode.empty()) {
++    active_pixel_shader_ =
++        LoadShader(xenos::ShaderType::kPixel, 0, pixel_ucode.data(),
++                   uint32_t(pixel_ucode.size()));
++  }
++  ChimeraPutBackDeviceState();
++}
++
+ void CommandProcessor::SetDesiredSwapPostEffect(
+     SwapPostEffect swap_post_effect) {
+   if (swap_post_effect_desired_ == swap_post_effect) {
+@@ -354,6 +407,7 @@ void CommandProcessor::WorkerThreadMain() {
+     xe::FatalError("Unable to setup command processor internal state");
+     return;
+   }
++  chimera_context_up_ = true;
+ 
+   while (worker_running_) {
+     while (!pending_fns_.empty()) {
+@@ -369,6 +423,8 @@ void CommandProcessor::WorkerThreadMain() {
+       // We spin here waiting for new ones, as the overhead of waiting on our
+       // event is too high.
+       PrepareForWait();
++      // chimera: out of packets - parked here, nothing of a draw is half done
++      chimera_quiet_ = true;
+       uint32_t loop_count = 0;
+       do {
+         // If we spin around too much, revert to a "low-power" state.
+@@ -389,6 +445,7 @@ void CommandProcessor::WorkerThreadMain() {
+       } while (worker_running_ && pending_fns_.empty() &&
+                (write_ptr_index == 0xBAADF00D ||
+                 read_ptr_index_ == write_ptr_index));
++      chimera_quiet_ = false;
+       ReturnFromWait();
+       if (!worker_running_ || !pending_fns_.empty()) {
+         continue;
+diff --git a/src/xenia/gpu/graphics_system.h b/src/xenia/gpu/graphics_system.h
+index a393db7ab..027998ee6 100644
+--- a/src/xenia/gpu/graphics_system.h
++++ b/src/xenia/gpu/graphics_system.h
+@@ -58,6 +58,10 @@ class GraphicsSystem {
+   // from a device loss.
+   void OnHostGpuLossFromAnyThread(bool is_responsible);
+ 
++  // chimera: the presenter and the provider let go, and made again. Called
++  // by the command processor with its own context already taken down.
++  void ChimeraRemakeDevice();
++
+   RegisterFile* register_file() { return register_file_; }
+   CommandProcessor* command_processor() const {
+     return command_processor_.get();
+@@ -116,6 +120,10 @@ class GraphicsSystem {
+   kernel::KernelState* kernel_state_ = nullptr;
+   ui::WindowedAppContext* app_context_ = nullptr;
+   std::unique_ptr<ui::GraphicsProvider> provider_;
++  // chimera: a provider like the one Setup made, or nothing
++  virtual std::unique_ptr<ui::GraphicsProvider> ChimeraCreateProvider() {
++    return nullptr;
++  }
+ 
+   uint32_t interrupt_callback_ = 0;
+   uint32_t interrupt_callback_data_ = 0;
+diff --git a/src/xenia/gpu/shared_memory.cc b/src/xenia/gpu/shared_memory.cc
+index 3afb39120..3b23169ee 100644
+--- a/src/xenia/gpu/shared_memory.cc
++++ b/src/xenia/gpu/shared_memory.cc
+@@ -599,6 +599,29 @@ std::pair<uint32_t, uint32_t> SharedMemory::MemoryInvalidationCallback(
+                         (page_last - page_first + 1) << page_size_log2_);
+ }
+ 
++void SharedMemory::ChimeraGpuWrittenRanges(
++    std::vector<std::pair<uint32_t, uint32_t>>& ranges_out) {
++  ranges_out.clear();
++  auto global_lock = global_critical_region_.Acquire();
++  const uint32_t page_count = num_system_page_flags_ << 6;
++  uint32_t range_start = UINT32_MAX;
++  for (uint32_t page = 0; page <= page_count; ++page) {
++    const bool written =
++        page < page_count &&
++        (system_page_flags_valid_and_gpu_written_[page >> 6] &
++         (uint64_t(1) << (page & 63))) != 0;
++    if (written) {
++      if (range_start == UINT32_MAX) {
++        range_start = page;
++      }
++    } else if (range_start != UINT32_MAX) {
++      ranges_out.emplace_back(range_start << page_size_log2_,
++                              (page - range_start) << page_size_log2_);
++      range_start = UINT32_MAX;
++    }
++  }
++}
++
+ void SharedMemory::PrepareForTraceDownload() {
+   ReleaseTraceDownloadRanges();
+   assert_true(trace_download_ranges_.empty());
+diff --git a/src/xenia/gpu/shared_memory.h b/src/xenia/gpu/shared_memory.h
+index 2b5675789..820703f47 100644
+--- a/src/xenia/gpu/shared_memory.h
++++ b/src/xenia/gpu/shared_memory.h
+@@ -105,6 +105,12 @@ class SharedMemory {
+   // regions in those pages.
+   void RangeWrittenByGpu(uint32_t start, uint32_t length);
+ 
++  // chimera: the parts of the buffer that hold what the device wrote there
++  // (a resolve) and that are in the console's memory nowhere: start and
++  // length in bytes. Nothing is invalidated by asking.
++  void ChimeraGpuWrittenRanges(
++      std::vector<std::pair<uint32_t, uint32_t>>& ranges_out);
++
+  protected:
+   SharedMemory(Memory& memory);
+   // Call in implementation-specific initialization.
+@@ -138,6 +144,10 @@ class SharedMemory {
+ 
+   // Mark the memory range as updated and protect it.
+   void MakeRangeValid(uint32_t start, uint32_t length, bool written_by_gpu);
++  // chimera: for a range put back (ChimeraPutBack in the implementation)
++  bool ChimeraEnsureAllocated(uint32_t start, uint32_t length) {
++    return EnsureHostGpuMemoryAllocated(start, length);
++  }
+ 
+   // Uploads a range of host pages - only called if host GPU sparse memory
+   // allocation succeeded if needed. While uploading, MakeRangeValid must be
+diff --git a/src/xenia/gpu/vulkan/vulkan_command_processor.cc b/src/xenia/gpu/vulkan/vulkan_command_processor.cc
+index 65bb0e38a..ef4cb6a39 100644
+--- a/src/xenia/gpu/vulkan/vulkan_command_processor.cc
++++ b/src/xenia/gpu/vulkan/vulkan_command_processor.cc
+@@ -122,6 +122,135 @@ void VulkanCommandProcessor::InitializeShaderStorage(
+ 
+ void VulkanCommandProcessor::RestoreEdramSnapshot(const void* snapshot) {}
+ 
++// The four members the constructor makes with the device: taken apart
++// before the device is, and made in place again with the new one.
++void VulkanCommandProcessor::ChimeraLeaveDevice() {
++  using ui::vulkan::LinkedTypeDescriptorSetAllocator;
++  using ui::vulkan::VulkanGPUCompletionTimeline;
++  transient_descriptor_allocator_textures_.~LinkedTypeDescriptorSetAllocator();
++  transient_descriptor_allocator_storage_buffer_
++      .~LinkedTypeDescriptorSetAllocator();
++  transient_descriptor_allocator_uniform_buffer_
++      .~LinkedTypeDescriptorSetAllocator();
++  completion_timeline_.~VulkanGPUCompletionTimeline();
++}
++
++void VulkanCommandProcessor::ChimeraEnterDevice() {
++  ui::vulkan::VulkanDevice* const device = GetVulkanDevice();
++  new (&completion_timeline_) ui::vulkan::VulkanGPUCompletionTimeline(device);
++  new (&transient_descriptor_allocator_uniform_buffer_)
++      ui::vulkan::LinkedTypeDescriptorSetAllocator(
++          device, &kDescriptorPoolSizeUniformBuffer, 1,
++          kLinkedTypeDescriptorPoolSetCount);
++  new (&transient_descriptor_allocator_storage_buffer_)
++      ui::vulkan::LinkedTypeDescriptorSetAllocator(
++          device, &kDescriptorPoolSizeStorageBuffer, 1,
++          kLinkedTypeDescriptorPoolSetCount);
++  new (&transient_descriptor_allocator_textures_)
++      ui::vulkan::LinkedTypeDescriptorSetAllocator(
++          device, kDescriptorPoolSizeTextures,
++          uint32_t(xe::countof(kDescriptorPoolSizeTextures)),
++          kLinkedTypeDescriptorPoolSetCount);
++}
++
++void VulkanCommandProcessor::ChimeraKeepDeviceState() {
++  chimera_kept_ = false;
++  chimera_kept_ranges_.clear();
++  chimera_kept_bytes_.clear();
++  chimera_kept_edram_.clear();
++  if (!BeginSubmission(false)) {
++    return;
++  }
++  const ui::vulkan::VulkanDevice* const vulkan_device = GetVulkanDevice();
++  const ui::vulkan::VulkanDevice::Functions& dfn = vulkan_device->functions();
++  const VkDevice device = vulkan_device->device();
++
++  shared_memory_->ChimeraGpuWrittenRanges(chimera_kept_ranges_);
++  VkDeviceSize ranges_bytes = 0;
++  for (const auto& range : chimera_kept_ranges_) {
++    ranges_bytes += range.second;
++  }
++  VkBuffer buffer;
++  VkDeviceMemory memory;
++  if (!ui::vulkan::util::CreateDedicatedAllocationBuffer(
++          vulkan_device, ranges_bytes + xenos::kEdramSizeBytes,
++          VK_BUFFER_USAGE_TRANSFER_DST_BIT,
++          ui::vulkan::util::MemoryPurpose::kReadback, buffer, memory)) {
++    XELOGE("No buffer to fetch what the device holds into");
++    chimera_kept_ranges_.clear();
++    return;
++  }
++  if (!chimera_kept_ranges_.empty()) {
++    shared_memory_->Use(VulkanSharedMemory::Usage::kRead);
++    SubmitBarriers(true);
++    VkBufferCopy* regions = deferred_command_buffer_.CmdCopyBufferEmplace(
++        shared_memory_->buffer(), buffer,
++        uint32_t(chimera_kept_ranges_.size()));
++    VkDeviceSize offset = 0;
++    for (size_t i = 0; i < chimera_kept_ranges_.size(); ++i) {
++      regions[i].srcOffset = chimera_kept_ranges_[i].first;
++      regions[i].dstOffset = offset;
++      regions[i].size = chimera_kept_ranges_[i].second;
++      offset += chimera_kept_ranges_[i].second;
++    }
++  }
++  const bool edram =
++      render_target_cache_->ChimeraCopyEdramOut(buffer, ranges_bytes);
++  PushBufferMemoryBarrier(buffer, 0, VK_WHOLE_SIZE,
++                          VK_PIPELINE_STAGE_TRANSFER_BIT,
++                          VK_PIPELINE_STAGE_HOST_BIT,
++                          VK_ACCESS_TRANSFER_WRITE_BIT,
++                          VK_ACCESS_HOST_READ_BIT);
++  SubmitBarriers(true);
++  EndSubmission(false);
++  AwaitAllQueueOperationsCompletion();
++
++  void* mapping;
++  if (dfn.vkMapMemory(device, memory, 0, VK_WHOLE_SIZE, 0, &mapping) ==
++      VK_SUCCESS) {
++    // what the device wrote is asked for, not assumed to be there
++    VkMappedMemoryRange read = {VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};
++    read.memory = memory;
++    read.size = VK_WHOLE_SIZE;
++    dfn.vkInvalidateMappedMemoryRanges(device, 1, &read);
++    const uint8_t* bytes = static_cast<const uint8_t*>(mapping);
++    chimera_kept_bytes_.assign(bytes, bytes + ranges_bytes);
++    if (edram) {
++      chimera_kept_edram_.assign(
++          bytes + ranges_bytes, bytes + ranges_bytes + xenos::kEdramSizeBytes);
++    }
++    dfn.vkUnmapMemory(device, memory);
++    chimera_kept_ = true;
++  } else {
++    chimera_kept_ranges_.clear();
++  }
++  dfn.vkDestroyBuffer(device, buffer, nullptr);
++  dfn.vkFreeMemory(device, memory, nullptr);
++}
++
++void VulkanCommandProcessor::ChimeraPutBackDeviceState() {
++  if (!chimera_kept_ || !BeginSubmission(false)) {
++    return;
++  }
++  size_t offset = 0;
++  for (const auto& range : chimera_kept_ranges_) {
++    shared_memory_->ChimeraPutBack(range.first, range.second,
++                                   chimera_kept_bytes_.data() + offset);
++    offset += range.second;
++  }
++  if (!chimera_kept_edram_.empty()) {
++    render_target_cache_->ChimeraPutEdramBack(chimera_kept_edram_.data());
++  }
++  // The submission stays open: the next draw carries on in it.
++}
++
++void VulkanCommandProcessor::ChimeraSubmitAll() {
++  if (submission_open_) {
++    EndSubmission(false);
++  }
++  AwaitAllQueueOperationsCompletion();
++}
++
+ std::string VulkanCommandProcessor::GetWindowTitleText() const {
+   std::ostringstream title;
+   title << "Vulkan";
+diff --git a/src/xenia/gpu/vulkan/vulkan_command_processor.h b/src/xenia/gpu/vulkan/vulkan_command_processor.h
+index dc63a3ce1..9270dba49 100644
+--- a/src/xenia/gpu/vulkan/vulkan_command_processor.h
++++ b/src/xenia/gpu/vulkan/vulkan_command_processor.h
+@@ -153,6 +153,14 @@ class VulkanCommandProcessor final : public CommandProcessor {
+ 
+   void RestoreEdramSnapshot(const void* snapshot) override;
+ 
++  // chimera (see command_processor.h)
++  void ChimeraSubmitAll() override;
++  void ChimeraKeepDeviceState() override;
++  void ChimeraPutBackDeviceState() override;
++  void ChimeraForgetDeviceState() override { chimera_kept_ = false; }
++  void ChimeraLeaveDevice() override;
++  void ChimeraEnterDevice() override;
++
+   void PollCompletedSubmission() override;
+ 
+   ui::vulkan::VulkanDevice* GetVulkanDevice() const {
+@@ -531,6 +539,14 @@ class VulkanCommandProcessor final : public CommandProcessor {
+ 
+   bool device_lost_ = false;
+ 
++  // chimera: what only the device held when it was last asked
++  // (ChimeraKeepDeviceState): the ranges of the shared memory it had written,
++  // their bytes one after another, and the EDRAM.
++  bool chimera_kept_ = false;
++  std::vector<std::pair<uint32_t, uint32_t>> chimera_kept_ranges_;
++  std::vector<uint8_t> chimera_kept_bytes_;
++  std::vector<uint8_t> chimera_kept_edram_;
++
+   bool cache_clear_requested_ = false;
+ 
+   // Host shader types that guest shaders can be translated into - they can
+diff --git a/src/xenia/gpu/vulkan/vulkan_graphics_system.cc b/src/xenia/gpu/vulkan/vulkan_graphics_system.cc
+index 3c80d766a..a9734a48c 100644
+--- a/src/xenia/gpu/vulkan/vulkan_graphics_system.cc
++++ b/src/xenia/gpu/vulkan/vulkan_graphics_system.cc
+@@ -39,6 +39,11 @@ X_STATUS VulkanGraphicsSystem::Setup(cpu::Processor* processor,
+                                with_presentation);
+ }
+ 
++std::unique_ptr<ui::GraphicsProvider>
++VulkanGraphicsSystem::ChimeraCreateProvider() {
++  return xe::ui::vulkan::VulkanProvider::Create(true, true);
++}
++
+ std::unique_ptr<CommandProcessor>
+ VulkanGraphicsSystem::CreateCommandProcessor() {
+   return std::make_unique<VulkanCommandProcessor>(this, kernel_state_);
+diff --git a/src/xenia/gpu/vulkan/vulkan_graphics_system.h b/src/xenia/gpu/vulkan/vulkan_graphics_system.h
+index d3e7469df..e967172f6 100644
+--- a/src/xenia/gpu/vulkan/vulkan_graphics_system.h
++++ b/src/xenia/gpu/vulkan/vulkan_graphics_system.h
+@@ -34,6 +34,7 @@ class VulkanGraphicsSystem : public GraphicsSystem {
+ 
+  private:
+   std::unique_ptr<CommandProcessor> CreateCommandProcessor() override;
++  std::unique_ptr<ui::GraphicsProvider> ChimeraCreateProvider() override;
+ };
+ 
+ }  // namespace vulkan
+diff --git a/src/xenia/gpu/vulkan/vulkan_render_target_cache.cc b/src/xenia/gpu/vulkan/vulkan_render_target_cache.cc
+index 581a34445..ac1ab7f25 100644
+--- a/src/xenia/gpu/vulkan/vulkan_render_target_cache.cc
++++ b/src/xenia/gpu/vulkan/vulkan_render_target_cache.cc
+@@ -987,6 +987,11 @@ void VulkanRenderTargetCache::Shutdown(bool from_destructor) {
+   // already too late.
+   DestroyAllRenderTargets(true);
+ 
++  ui::vulkan::util::DestroyAndNullHandle(dfn.vkDestroyBuffer, device,
++                                         chimera_edram_staging_buffer_);
++  ui::vulkan::util::DestroyAndNullHandle(dfn.vkFreeMemory, device,
++                                         chimera_edram_staging_memory_);
++
+   ui::vulkan::util::DestroyAndNullHandle(dfn.vkDestroyPipeline, device,
+                                          resolve_fsi_clear_64bpp_pipeline_);
+   ui::vulkan::util::DestroyAndNullHandle(dfn.vkDestroyPipeline, device,
+@@ -2236,6 +2241,125 @@ void VulkanRenderTargetCache::GetEdramBufferUsageMasks(
+   }
+ }
+ 
++bool VulkanRenderTargetCache::ChimeraCopyEdramOut(VkBuffer destination,
++                                                  VkDeviceSize offset) {
++  if (IsDrawResolutionScaled()) {
++    return false;
++  }
++  if (GetPath() == Path::kHostRenderTargets) {
++    // every tile, from whichever host render target owns it, into the buffer
++    DumpRenderTargets(0, xenos::kEdramTileCount, 1, xenos::kEdramTileCount,
++                      false);
++  }
++  UseEdramBuffer(EdramBufferUsage::kTransferRead);
++  command_processor_.SubmitBarriers(true);
++  VkBufferCopy* region =
++      command_processor_.deferred_command_buffer().CmdCopyBufferEmplace(
++          edram_buffer_, destination, 1);
++  region->srcOffset = 0;
++  region->dstOffset = offset;
++  region->size = xenos::kEdramSizeBytes;
++  return true;
++}
++
++bool VulkanRenderTargetCache::ChimeraPutEdramBack(const uint8_t* edram) {
++  if (IsDrawResolutionScaled()) {
++    return false;
++  }
++  const ui::vulkan::VulkanDevice* const vulkan_device =
++      command_processor_.GetVulkanDevice();
++  const ui::vulkan::VulkanDevice::Functions& dfn = vulkan_device->functions();
++  const VkDevice device = vulkan_device->device();
++  if (chimera_edram_staging_buffer_ == VK_NULL_HANDLE) {
++    if (!ui::vulkan::util::CreateDedicatedAllocationBuffer(
++            vulkan_device, xenos::kEdramSizeBytes,
++            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
++            ui::vulkan::util::MemoryPurpose::kUpload,
++            chimera_edram_staging_buffer_, chimera_edram_staging_memory_)) {
++      XELOGE("VulkanRenderTargetCache: no buffer to put the EDRAM back from");
++      return false;
++    }
++  }
++  void* mapping;
++  if (dfn.vkMapMemory(device, chimera_edram_staging_memory_, 0, VK_WHOLE_SIZE,
++                      0, &mapping) != VK_SUCCESS) {
++    return false;
++  }
++  DeferredCommandBuffer& command_buffer =
++      command_processor_.deferred_command_buffer();
++  bool done = false;
++  switch (GetPath()) {
++    case Path::kHostRenderTargets: {
++      // One render target the size of the whole EDRAM, 16 tiles a row, owns
++      // every tile from now on; whoever draws next takes what it needs from
++      // it as from any other owner. The snapshot is a tile after another;
++      // the image is rows.
++      auto* render_target = static_cast<VulkanRenderTarget*>(
++          PrepareFullEdram1280xRenderTargetForSnapshotRestoration(
++              xenos::ColorRenderTargetFormat::k_32_FLOAT));
++      if (!render_target) {
++        break;
++      }
++      constexpr uint32_t kPitchTiles = 16;
++      constexpr uint32_t kTileRows = xenos::kEdramTileCount / kPitchTiles;
++      constexpr size_t kTileRowBytes =
++          sizeof(uint32_t) * xenos::kEdramTileWidthSamples;
++      constexpr size_t kImageRowBytes = kTileRowBytes * kPitchTiles;
++      const uint8_t* source = edram;
++      for (uint32_t y_tile = 0; y_tile < kTileRows; ++y_tile) {
++        for (uint32_t x_tile = 0; x_tile < kPitchTiles; ++x_tile) {
++          for (uint32_t row = 0; row < xenos::kEdramTileHeightSamples; ++row) {
++            std::memcpy(
++                static_cast<uint8_t*>(mapping) +
++                    (size_t(y_tile) * xenos::kEdramTileHeightSamples + row) *
++                        kImageRowBytes +
++                    x_tile * kTileRowBytes,
++                source, kTileRowBytes);
++            source += kTileRowBytes;
++          }
++        }
++      }
++      TransitionRenderTarget(*render_target, VK_PIPELINE_STAGE_TRANSFER_BIT,
++                             VK_ACCESS_TRANSFER_WRITE_BIT,
++                             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
++      command_processor_.SubmitBarriers(true);
++      VkBufferImageCopy region = {};
++      region.bufferRowLength = kPitchTiles * xenos::kEdramTileWidthSamples;
++      region.bufferImageHeight = kTileRows * xenos::kEdramTileHeightSamples;
++      region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
++      region.imageSubresource.layerCount = 1;
++      region.imageExtent.width = region.bufferRowLength;
++      region.imageExtent.height = region.bufferImageHeight;
++      region.imageExtent.depth = 1;
++      command_buffer.CmdVkCopyBufferToImage(
++          chimera_edram_staging_buffer_, render_target->image(),
++          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
++      done = true;
++    } break;
++    case Path::kPixelShaderInterlock: {
++      std::memcpy(mapping, edram, xenos::kEdramSizeBytes);
++      UseEdramBuffer(EdramBufferUsage::kTransferWrite);
++      command_processor_.SubmitBarriers(true);
++      VkBufferCopy* region = command_buffer.CmdCopyBufferEmplace(
++          chimera_edram_staging_buffer_, edram_buffer_, 1);
++      region->srcOffset = 0;
++      region->dstOffset = 0;
++      region->size = xenos::kEdramSizeBytes;
++      done = true;
++    } break;
++    default:
++      break;
++  }
++  // No memory type is known to be coherent to this renderer when the device
++  // is a sandbox's: what was written is said to have been.
++  VkMappedMemoryRange written = {VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};
++  written.memory = chimera_edram_staging_memory_;
++  written.size = VK_WHOLE_SIZE;
++  dfn.vkFlushMappedMemoryRanges(device, 1, &written);
++  dfn.vkUnmapMemory(device, chimera_edram_staging_memory_);
++  return done;
++}
++
+ void VulkanRenderTargetCache::UseEdramBuffer(EdramBufferUsage new_usage) {
+   if (edram_buffer_usage_ == new_usage) {
+     return;
+diff --git a/src/xenia/gpu/vulkan/vulkan_render_target_cache.h b/src/xenia/gpu/vulkan/vulkan_render_target_cache.h
+index 7436f8c5f..264df4459 100644
+--- a/src/xenia/gpu/vulkan/vulkan_render_target_cache.h
++++ b/src/xenia/gpu/vulkan/vulkan_render_target_cache.h
+@@ -118,6 +118,13 @@ class VulkanRenderTargetCache final : public RenderTargetCache {
+ 
+   VkBuffer edram_buffer() const { return edram_buffer_; }
+ 
++  // chimera: the console's render targets - the EDRAM, 10 MiB as the console
++  // lays it out - copied into a buffer at an offset, and put back from one.
++  // What the D3D12 renderer does for a trace's snapshot. A submission must be
++  // open; false where it cannot be done (a resolution above the console's).
++  bool ChimeraCopyEdramOut(VkBuffer destination, VkDeviceSize offset);
++  bool ChimeraPutEdramBack(const uint8_t* edram);
++
+   // Performs the resolve to a shared memory area according to the current
+   // register values, and also clears the render targets if needed. Must be in a
+   // frame for calling. copy_dest_info_out, if not null, receives the
+@@ -311,6 +318,9 @@ class VulkanRenderTargetCache final : public RenderTargetCache {
+   VkDeviceMemory edram_buffer_memory_ = VK_NULL_HANDLE;
+   VkBuffer edram_buffer_ = VK_NULL_HANDLE;
+   EdramBufferUsage edram_buffer_usage_;
++  // chimera: where a snapshot waits to be copied in (ChimeraPutEdramBack)
++  VkBuffer chimera_edram_staging_buffer_ = VK_NULL_HANDLE;
++  VkDeviceMemory chimera_edram_staging_memory_ = VK_NULL_HANDLE;
+   EdramBufferModificationStatus edram_buffer_modification_status_ =
+       EdramBufferModificationStatus::kUnmodified;
+   VkDescriptorPool edram_storage_buffer_descriptor_pool_ = VK_NULL_HANDLE;
+diff --git a/src/xenia/gpu/vulkan/vulkan_shared_memory.cc b/src/xenia/gpu/vulkan/vulkan_shared_memory.cc
+index fe8dc6487..7a37faf3f 100644
+--- a/src/xenia/gpu/vulkan/vulkan_shared_memory.cc
++++ b/src/xenia/gpu/vulkan/vulkan_shared_memory.cc
+@@ -258,6 +258,44 @@ void VulkanSharedMemory::Use(Usage usage,
+   last_written_range_ = written_range;
+ }
+ 
++bool VulkanSharedMemory::ChimeraPutBack(uint32_t start, uint32_t length,
++                                        const uint8_t* data) {
++  if (!length) {
++    return true;
++  }
++  if (!ChimeraEnsureAllocated(start, length)) {
++    return false;
++  }
++  Use(Usage::kTransferDestination, std::make_pair(start, length));
++  command_processor_.SubmitBarriers(true);
++  DeferredCommandBuffer& command_buffer =
++      command_processor_.deferred_command_buffer();
++  const uint64_t submission_current = command_processor_.GetCurrentSubmission();
++  uint32_t done = 0;
++  while (done < length) {
++    VkBuffer upload_buffer;
++    VkDeviceSize upload_buffer_offset, upload_buffer_size;
++    uint8_t* upload_buffer_mapping = upload_buffer_pool_->RequestPartial(
++        submission_current, length - done, size_t(1) << page_size_log2(),
++        upload_buffer, upload_buffer_offset, upload_buffer_size);
++    if (upload_buffer_mapping == nullptr) {
++      XELOGE("Shared memory: Failed to get a Vulkan upload buffer");
++      return false;
++    }
++    std::memcpy(upload_buffer_mapping, data + done, upload_buffer_size);
++    VkBufferCopy* region =
++        command_buffer.CmdCopyBufferEmplace(upload_buffer, buffer_, 1);
++    region->srcOffset = upload_buffer_offset;
++    region->dstOffset = VkDeviceSize(start) + done;
++    region->size = upload_buffer_size;
++    done += uint32_t(upload_buffer_size);
++  }
++  // valid, and the device's: a write by the program to these pages is still
++  // heard of, and they are not uploaded from a memory that never had them
++  MakeRangeValid(start, length, true);
++  return true;
++}
++
+ bool VulkanSharedMemory::InitializeTraceSubmitDownloads() {
+   ResetTraceDownload();
+   PrepareForTraceDownload();
+diff --git a/src/xenia/gpu/vulkan/vulkan_shared_memory.h b/src/xenia/gpu/vulkan/vulkan_shared_memory.h
+index 7defe21d5..9c9448d81 100644
+--- a/src/xenia/gpu/vulkan/vulkan_shared_memory.h
++++ b/src/xenia/gpu/vulkan/vulkan_shared_memory.h
+@@ -54,6 +54,10 @@ class VulkanSharedMemory : public SharedMemory {
+ 
+   VkBuffer buffer() const { return buffer_; }
+ 
++  // chimera: a range put back as what the device had written there - on
++  // another device than the one that wrote it. A submission must be open.
++  bool ChimeraPutBack(uint32_t start, uint32_t length, const uint8_t* data);
++
+   // Returns true if any downloads were submitted to the command processor.
+   bool InitializeTraceSubmitDownloads();
+   void InitializeTraceCompleteDownloads();

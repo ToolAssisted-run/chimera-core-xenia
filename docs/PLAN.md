@@ -12,11 +12,12 @@ does not this file will say so.
 
 Where it stands (2026-10-10): the owner's one game runs in the sandbox, a
 frame at a time, to the same memory, sound and schedule as the native build,
-and draws through miniBox's Vulkan bridge the pictures the native build
-draws. What it cannot do yet is load a state with the Vulkan renderer (the
-renderer does not rebuild itself on a new device), and it is not a package
-the frontend can open. This file is the survey, the route, and what each
-step measured.
+draws through miniBox's Vulkan bridge the pictures the native build draws,
+and loads a state with that renderer - on a new device, in another process -
+to the picture it would have had. All of it on a software Vulkan (llvmpipe)
+and on one game's first seconds. It is not yet a package the frontend can
+open, and it has not met a real card. This file is the survey, the route,
+and what each step measured.
 
 ## The pin
 
@@ -89,9 +90,9 @@ exist.
 - **M3 - savestates, input, lag.** DONE 2026-10-10 (below), with no
   picture: the core's exports, a frame, pads, sound, and states that are the
   whole machine.
-- **M4 - the picture**, through the Vulkan bridge. HALF DONE 2026-10-10
-  (below): it draws in the sandbox what it draws natively. A load with this
-  renderer is not done.
+- **M4 - the picture**, through the Vulkan bridge. DONE 2026-10-10 on
+  llvmpipe (below, two sections): it draws in the sandbox what it draws
+  natively, and a load puts the renderer back on a new device.
 - **M5 - the package and the frontend.**
 
 ## M0: the build (2026-10-10)
@@ -576,33 +577,116 @@ upstream starts to write the game's shaders beside its cache for the next
 run, and which a guest with nowhere to write never starts. The store is off
 (`store_shaders`): it would also have made a run depend on the runs before.
 
-**Not done, and it is the larger half.** A load. The bridge makes every
-load a new device, and upstream answers a lost device with a fatal error
-(its own comment lists what would have to be reset, as a TODO). What a state
-must carry that it does not: the console's render targets (the EDRAM lives
-on the device; upstream can dump it and restore it for trace playback, in
-its Direct3D renderer only), and what the GPU wrote into memory by
-resolving (kept on the device unless `readback_resolve` is on). What must
-happen after a load: the command processor's context taken down and made
-again on the new device, at a moment when its thread is between packets,
-and the shaders in use loaded again. Until then the state legs of the gate
-are the renderer that draws nothing.
-
-Also not done: the frontend's side (an engine export to hand the bridge
+Not done here: the frontend's side (an engine export to hand the bridge
 over, as `SetGpuBridge` is for OpenGL - a change to what Chimera is, so the
 owner's), a real card (the GTX 1060 is on the Windows side, and the gate's
 runner is Linux-only), and a second game.
 
+## M4: the renderer on another device (2026-10-10)
+
+The bridge makes every load a new device: nothing a savestate names can be
+trusted to exist in the process that loads it. Upstream answers a lost
+device with a fatal error (its own comment lists what would have to be
+reset, as a TODO). Patch 0010 is that TODO, for this one case.
+
+**Made again.** `CommandProcessor::ChimeraRemakeContext`: the context is
+shut down (upstream's own `ShutdownContext`, which already lets go of
+everything), the provider and the presenter are made again, the four members
+of the Vulkan command processor that were constructed with the device are
+taken apart before it goes and made in place after, the context is set up,
+and the two shaders in use - which belonged to the context - are loaded
+again from their own code. After a load the old device answers nothing, and
+that is harmless by the bridge's design: a call that names something gone is
+refused (some 180 of them a load, all teardown).
+
+**When.** Not from the renderer's own thread. Only one thread of the
+machine runs at a time, so the frame's thread can use the renderer as its
+own thread would, provided that thread is parked with nothing of a draw half
+done. It says when it is (`ChimeraQuiet`): out of packets, or inside the one
+packet that waits for the program (`WAIT_REG_MEM`, where a loading game
+keeps it for whole frames). A frame ends by waiting for that - it is nearly
+always true already, and the wait is given up after one frame's time - and a
+remake is done at the start of the next frame, before anybody runs. So no
+thread is ever told to stop, and a frame's end did not move: the digests of
+a run with all of this are the digests of the run before it existed.
+
+Two things upstream had to give up for it:
+
+- **Pipelines are made by the thread that needs them**
+  (`vulkan_pipeline_creation_threads` 0). The threads upstream makes them on
+  would have to be ended and started again at every remake, and a thread
+  started later sits in another place in the order threads run in - another
+  machine. In a sandbox they were no faster anyway. With them gone the
+  machine's schedule with the Vulkan renderer is, to the last handing over,
+  its schedule with the renderer that draws nothing.
+- **A wait that spun.** `WAIT_REG_MEM` with a short wait is an empty loop
+  upstream, waiting for another thread to write a value; with one thread
+  running it would never have ended. It yields.
+
+**What only the device holds.** Two things, and a state must have both or a
+load shows a picture the run never had:
+
+- what the device wrote into the console's memory by resolving a render
+  target - which upstream keeps on the device and never writes to the
+  console's RAM (the front buffer the program presents is one of these: the
+  first trial showed black after every remake);
+- the render targets themselves, the EDRAM, 10 MiB.
+
+`ChimeraKeepDeviceState` fetches both into the emulator's own memory - the
+ranges of the shared memory marked as written by the GPU, and the EDRAM by
+upstream's own dump of every host render target into its buffer, the recipe
+the Direct3D renderer uses for a trace's snapshot. `ChimeraPutBackDeviceState`
+uploads the ranges as GPU-written ones and restores the EDRAM into one
+render target that owns every tile (a port of the Direct3D renderer's
+`RestoreEdramSnapshot`, which the Vulkan one had as an empty function).
+
+The alternative was upstream's `readback_resolve`, which writes resolved
+data into the console's RAM as the console does. It was not taken: the
+machine's memory would then hold pixels, and pixels are the card's - a
+movie made on one card would be another machine on another. As it is, the
+512 MiB are the same whatever draws, and what the device holds travels in
+the state beside them.
+
+The frontend's engine says when a state is about to be saved (`StateSaving`,
+an export it already calls for another core), and that is when the fetch is
+made; the gate's harness calls it as the engine does.
+
+**Measured**, Mirror's Edge, llvmpipe, digests at every twentieth frame,
+pictures included:
+
+| run | result |
+| --- | --- |
+| native, the renderer made again on a new device before every frame, 300 frames | the lines of the run in which it never was |
+| sandbox, a state saved and loaded before every frame, 300 frames | the same lines; 54,613 calls refused, all of them teardown; 195 s |
+| a state saved after frame 30 by one process, carried on by another | the same lines |
+| a load before the renderer's thread has ever run | found by the second row at its first frame: there is no context to take down yet, only a device to replace |
+
+Without the fetch (the first trial, and the gate's control): the same
+schedule and memory, and a black picture wherever a remake came between a
+resolve and the frame that showed it.
+
+**Not established.** A real card: llvmpipe has no fragment shader interlock,
+so only the path with host render targets has run, and the other path's
+put-back (a plain buffer copy) has never executed. Resolution above the
+console's: upstream's dump does not exist there and the fetch says so; the
+core draws at 1x. Speed: a save fetches 10 MiB and the resolved ranges from
+the device every time. A second game. And host depth: a depth buffer kept
+on the host at more than the console's 24 bits goes through the console's
+format on its way into a state, which upstream's own snapshot does too.
+
 ## The gate (2026-10-10)
 
-`waterbox/run-gate.sh`, 7 legs, four minutes: two native runs are one run
+`waterbox/run-gate.sh`, 10 legs, six minutes: two native runs are one run
 and a run with another instruction cost is another; the sandbox is the
 native run at every sixtieth frame; a button makes another run, the same in
 both; a state saved and loaded before each of 300 frames is the run that
 was never stopped; a state saved by one process is carried on by another;
-300 frames drawn through the bridge are the 300 drawn without it; and
-every eighteenth file of upstream's instruction tests fails, in the
-sandbox, what the reference fails.
+300 frames drawn through the bridge are the 300 drawn without it; the
+renderer made again on a new device before every seventh frame changes
+nothing, a state saved and loaded before every frame with that renderer
+changes nothing, and a state carried into another process ends with the
+unbroken run's picture; and every eighteenth file of upstream's instruction
+tests fails, in the sandbox, what the reference fails.
 
 Each leg has been seen to fail, by hand, once:
 
@@ -614,6 +698,9 @@ Each leg has been seen to fail, by hand, once:
 - a bridge whose flush writes nothing (miniBox's `VKB_TEST_BREAK_FLUSH`
   built into the runner): every picture is the blank one, and the machine
   is untouched;
+- a state made without asking the device for what only it holds
+  (`HARNESS_BREAK_NO_STATE_SAVING`): the same schedule and the same memory,
+  and every picture after a load the blank one;
 - one failing test taken out of the reference (`XENIA_PPC_REFERENCE`): "1039
   fail, the reference says 1038", and the test is named;
 - a part of the instruction tests in which nothing fails is refused, which

@@ -1989,7 +1989,7 @@ index 29c885add..1444a5d3d 100644
    }
  };
 diff --git a/src/xenia/gpu/graphics_system.cc b/src/xenia/gpu/graphics_system.cc
-index f4f4a157d..e90c66875 100644
+index f4f4a157d..bffede44c 100644
 --- a/src/xenia/gpu/graphics_system.cc
 +++ b/src/xenia/gpu/graphics_system.cc
 @@ -7,6 +7,7 @@
@@ -2029,6 +2029,67 @@ index f4f4a157d..e90c66875 100644
                  // A pause is not missed beats: start again from now after
                  // one.
                  if (vblank_deadline_reset_.exchange(false) ||
+@@ -288,8 +300,31 @@ void GraphicsSystem::Shutdown() {
+   provider_.reset();
+ }
+ 
++void GraphicsSystem::ChimeraRemakeDevice() {
++  presenter_.reset();
++  provider_.reset();
++  provider_ = ChimeraCreateProvider();
++  if (provider_) {
++    presenter_ = provider_->CreatePresenter(
++        [this](bool is_responsible, bool statically_from_ui_thread) {
++          OnHostGpuLossFromAnyThread(is_responsible);
++        });
++  }
++  host_gpu_loss_reported_.clear(std::memory_order_relaxed);
++}
++
+ void GraphicsSystem::OnHostGpuLossFromAnyThread(
+     [[maybe_unused]] bool is_responsible) {
++#ifdef CHIMERA_HEADLESS
++  // chimera: a device is lost when a savestate is loaded - every load is a
++  // new one - and the renderer is made again on the new one when its thread
++  // is next between packets (CommandProcessor::ChimeraRemakeContext). Until
++  // then what it asks of the old one is refused, and that is all.
++  if (!host_gpu_loss_reported_.test_and_set(std::memory_order_relaxed)) {
++    XELOGW("The graphics device is lost; the renderer will be made again");
++  }
++  return;
++#endif
+   // TODO(Triang3l): Somehow gain exclusive ownership of the Provider (may be
+   // used by the command processor, the presenter, and possibly anything else,
+   // it's considered free-threaded, except for lifetime management which will be
+diff --git a/src/xenia/gpu/pm4_command_processor_implement.h b/src/xenia/gpu/pm4_command_processor_implement.h
+index 1311d5ec6..6249bb6c5 100644
+--- a/src/xenia/gpu/pm4_command_processor_implement.h
++++ b/src/xenia/gpu/pm4_command_processor_implement.h
+@@ -739,6 +739,9 @@ bool COMMAND_PROCESSOR::ExecutePacketType3_WAIT_REG_MEM(
+     matched = MatchValueAndRef(value & mask, ref, wait_info);
+ 
+     if (!matched) {
++      // chimera: the program may keep the worker here for a long time, and
++      // nothing of a draw is half done here (ChimeraQuiet)
++      chimera_quiet_ = true;
+       // Wait.
+       if (wait >= 0x100) {
+         PrepareForWait();
+@@ -755,7 +758,14 @@ bool COMMAND_PROCESSOR::ExecutePacketType3_WAIT_REG_MEM(
+           return false;
+         }
+       } else {
++#ifdef CHIMERA_VSCHED
++        // chimera: upstream spins here, and whoever will write what is
++        // waited for is another thread - which, with one thread running at
++        // a time, never gets to
++        xe::threading::MaybeYield();
++#endif
+       }
++      chimera_quiet_ = false;
+     }
+   } while (!matched);
+ 
 diff --git a/src/xenia/gpu/shader_storage.h b/src/xenia/gpu/shader_storage.h
 index 70c2c91d6..a12cc447e 100644
 --- a/src/xenia/gpu/shader_storage.h

@@ -197,6 +197,8 @@ int main(int argc, char **argv)
 		(uint64_t (*)(void))proc("GetGpuCounter"),
 		(uint64_t (*)(void))proc("GetRamDigest"),
 		(const uint8_t *(*)(int32_t, int64_t, int32_t))proc("ReadBus"),
+		(void (*)(void))proc("RemakeRenderer"),
+		(void (*)(void))proc("StateSaving"),
 		(uint32_t *(*)(void))proc("GetVideoBgra"),
 		(int (*)(void))proc("GetVideoWidth"),
 		(int (*)(void))proc("GetVideoHeight"),
