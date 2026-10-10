@@ -1,0 +1,74 @@
+diff --git a/src/xenia/emulator.cc b/src/xenia/emulator.cc
+index eadd15ccf..4c379dc98 100644
+--- a/src/xenia/emulator.cc
++++ b/src/xenia/emulator.cc
+@@ -300,7 +300,10 @@ X_STATUS Emulator::Setup(
+   }
+ 
+   // Add inputSystem to UI
+-  imgui_drawer_->LoadInputSystem(input_system_.get());
++  // chimera: there may be no UI
++  if (imgui_drawer_) {
++    imgui_drawer_->LoadInputSystem(input_system_.get());
++  }
+ 
+   XELOGI("{}: Initializing VFS...", __func__);
+   // Bring up the virtual filesystem used by the kernel.
+@@ -841,8 +844,10 @@ X_STATUS Emulator::DataMigration(const uint64_t xuid) {
+     migration_status_message.append(
+         " For more information check xenia.log file.");
+   }
+-  new xe::ui::HostNotificationWindow(imgui_drawer_, "Migration Status",
+-                                     migration_status_message, 0);
++  if (imgui_drawer_) {  // chimera: there may be no UI
++    new xe::ui::HostNotificationWindow(imgui_drawer_, "Migration Status",
++                                       migration_status_message, 0);
++  }
+   return X_STATUS_SUCCESS;
+ }
+ 
+@@ -906,9 +911,11 @@ X_STATUS Emulator::ProcessContentPackageHeader(
+   installation_info.content_size_ = package->GetPackageSize();
+   installation_info.installation_state_ = InstallState::pending;
+ 
+-  installation_info.icon_ = imgui_drawer_->LoadImGuiIcon(
+-      std::span<const uint8_t>(header->content_metadata.title_thumbnail,
+-                               header->content_metadata.title_thumbnail_size));
++  if (imgui_drawer_) {  // chimera: there may be no UI
++    installation_info.icon_ = imgui_drawer_->LoadImGuiIcon(
++        std::span<const uint8_t>(header->content_metadata.title_thumbnail,
++                                 header->content_metadata.title_thumbnail_size));
++  }
+ 
+   return X_STATUS_SUCCESS;
+ }
+@@ -1566,7 +1573,8 @@ X_STATUS Emulator::CompleteLaunch(const std::filesystem::path& path,
+   // Making changes to the UI (setting the icon) and executing game config
+   // load callbacks which expect to be called from the UI thread.
+   // If not on UI thread, dispatch to it synchronously.
+-  if (!display_window_->app_context().IsInUIThread()) {
++  // chimera: with no window there is no UI thread to go to
++  if (display_window_ && !display_window_->app_context().IsInUIThread()) {
+     X_STATUS result = X_STATUS_UNSUCCESSFUL;
+     display_window_->app_context().CallInUIThreadSynchronous(
+         [this, &path, &module_path, &result]() {
+@@ -1598,7 +1606,9 @@ X_STATUS Emulator::CompleteLaunch(const std::filesystem::path& path,
+   title_id_ = std::nullopt;
+   title_name_ = "";
+   title_version_ = "";
+-  display_window_->SetIcon(nullptr, 0);
++  if (display_window_) {  // chimera: there may be no window
++    display_window_->SetIcon(nullptr, 0);
++  }
+ 
+   // Allow xam to request module loads.
+   auto xam = kernel_state()->GetKernelModule<kernel::xam::XamModule>("xam.xex");
+@@ -1805,7 +1815,7 @@ X_STATUS Emulator::CompleteLaunch(const std::filesystem::path& path,
+              table.str());
+ 
+       auto icon_block = game_info_database_->GetIcon();
+-      if (!icon_block.empty()) {
++      if (!icon_block.empty() && display_window_) {  // chimera
+         display_window_->SetIcon(icon_block.data(), icon_block.size());
+       }
+     }

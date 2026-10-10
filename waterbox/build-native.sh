@@ -50,9 +50,11 @@ if [ ! -x "$tools/bin/spirv-opt" ] || [ ! -x "$tools/bin/spirv-dis" ]; then
 fi
 
 # XENIA_BUILD_TESTS brings upstream's instruction-test runner
-# (xenia-cpu-ppc-tests), which waterbox/run-ppc-tests.sh runs.
+# (xenia-cpu-ppc-tests), which waterbox/run-ppc-tests.sh runs;
+# CHIMERA_DRIVER_DIR brings the core's own driver, waterbox/native/run-native.
 CC="${CC:-clang-20}" CXX="${CXX:-clang++-20}" cmake -S "$xenia" -B "$native" -G Ninja \
-	-DCMAKE_BUILD_TYPE=Release -DCHIMERA_HEADLESS=ON -DXENIA_BUILD_TESTS=ON > "$root/build/configure-native.log" 2>&1
+	-DCMAKE_BUILD_TYPE=Release -DCHIMERA_HEADLESS=ON -DXENIA_BUILD_TESTS=ON \
+	-DCHIMERA_DRIVER_DIR="$here/native" > "$root/build/configure-native.log" 2>&1
 
 # What xenia-build.py writes before a build: which commit this is. The date is
 # a word and not a date, so that two builds of one commit are one binary.
@@ -77,4 +79,4 @@ VULKAN_SDK="$tools" ninja -C "$native" $jobs > "$root/build/build-native.log" 2>
 	echo "the native build failed: build/build-native.log" >&2
 	exit 1
 }
-echo "built: $(ls "$native"/obj/Linux/*.a | wc -l) libraries in build/native/obj/Linux"
+echo "built: $(ls "$native"/obj/Linux/*.a | wc -l) libraries, and build/native/bin/Linux/run-native"

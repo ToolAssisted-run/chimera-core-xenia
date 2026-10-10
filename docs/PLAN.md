@@ -71,10 +71,10 @@ instruction counting in a JIT, the JIT's tables moved, the aliased memory
 folded, and a renderer that reaches a real card through a bridge that did not
 exist.
 
-- **M0 - a native headless reference.** In progress. The build: DONE
-  2026-10-10 (below). Upstream's instruction tests running on it: DONE
-  2026-10-10 (below). A driver that boots a program with the null renderer
-  and no window: not started.
+- **M0 - a native headless reference.** DONE 2026-10-10: the build, upstream's
+  instruction tests on it, and a driver that boots a game with no window
+  (all below). It is a reference that runs, not yet one that repeats: the
+  clock and the threads are still the host's.
 - **M1 - virtual time.** A scheduler behind `xe::threading`, a charge per
   block in the x64 emitter, the clock from it.
 - **M2 - the guest build.** The JIT's tables and the memory views.
@@ -107,6 +107,48 @@ on Ubuntu 24.04:
 Not established by this: that anything runs. The emulator's own setup
 (`emulator.cc`) uses its window and its ImGui drawer in several places
 without asking whether there is one, which the driver will have to deal with.
+
+## M0: a game, with no window (2026-10-10)
+
+`waterbox/native/run-native` is the emulator set up with no window, no ImGui
+drawer, the no-op audio and pad drivers and either renderer, run on a program
+for so many seconds of the host's clock. It is built inside Xenia's build
+(patch 0001 adds a directory named by `CHIMERA_DRIVER_DIR`).
+
+What it took:
+
+- **Patch 0002: an emulator with no window.** `emulator.cc` already takes a
+  null window in some places and not in others; six uses of the window or the
+  drawer are guarded.
+- **Logging has to be started by hand.** Upstream's console entry point on
+  Linux has the call commented out, and a logger that was never started does
+  not drop a line - it waits for room that never comes. The first thing to
+  log is the Vulkan loader, so the first run sat in `Emulator::Setup` for
+  ever, printing nothing. Read off a debugger.
+- **The kernel has its own switch for nobody being there** (`headless`),
+  which answers its dialogs; the driver sets it.
+
+Measured with the owner's disc image of Mirror's Edge (title 45410850,
+`tests/roms`, never committed), twenty seconds each:
+
+| renderer | frames presented | what the log says |
+| --- | --- | --- |
+| null | 1700 | every draw "Failed in backend", as a renderer that draws nothing would |
+| Vulkan, on llvmpipe (Mesa 25.2.8) | 1697 | no draw fails; one kernel call the game makes is not implemented (`IoDismountVolumeByFileHandle`, twice) |
+
+So the game's code runs on the recompiler on Linux with clang 20, and Xenia's
+Vulkan renderer runs with no window. About 86 frames a second are presented
+in both, which is the game's intro pacing itself on the host's clock and says
+nothing about speed.
+
+Not established: that any of it is right. No frame has been looked at - with
+no window there is no presenter, and nothing copies a picture out yet. The
+"null" renderer is not null either: it makes a Vulkan device of its own
+(`NullGraphicsSystem::Setup` creates a provider), which the sandbox's
+reference renderer may not. And the device extensions the Vulkan renderer
+turned on here - conditional rendering, custom border colour, fragment shader
+interlock, memory budget, non-seamless cube map, shader stencil export - are
+all ones the bridge offers.
 
 ## The recompiler's own tests (2026-10-10)
 

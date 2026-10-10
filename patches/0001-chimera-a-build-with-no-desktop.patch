@@ -58,7 +58,7 @@ index b712553ca..aaff6ce0e 100644
  
    list(APPEND _sources ${_plat_sources})
 diff --git a/src/xenia/CMakeLists.txt b/src/xenia/CMakeLists.txt
-index f73d1e2bf..6c78ca5da 100644
+index f73d1e2bf..553877973 100644
 --- a/src/xenia/CMakeLists.txt
 +++ b/src/xenia/CMakeLists.txt
 @@ -35,6 +35,7 @@ if(NOT APPLE)
@@ -69,10 +69,15 @@ index f73d1e2bf..6c78ca5da 100644
  add_subdirectory(debug/ui)
  add_subdirectory(app/discord)
  add_subdirectory(app)
-@@ -49,6 +50,7 @@ add_subdirectory(hid/keyboard)
+@@ -49,6 +50,12 @@ add_subdirectory(hid/keyboard)
  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
    add_subdirectory(apu/alsa)
  endif()
++endif()
++
++# chimera: the core's own programs, from outside this tree
++if(CHIMERA_DRIVER_DIR)
++  add_subdirectory(${CHIMERA_DRIVER_DIR} chimera-driver)
 +endif()
  
  if(WIN32)
