@@ -1,8 +1,8 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 30febc4b7..7b7b7ad3c 100644
+index 30febc4b7..32f901c5d 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -36,6 +36,12 @@ message(STATUS "Target architecture: XE_TARGET_AARCH64=${XE_TARGET_AARCH64} XE_T
+@@ -36,6 +36,18 @@ message(STATUS "Target architecture: XE_TARGET_AARCH64=${XE_TARGET_AARCH64} XE_T
  # Options
  option(XENIA_BUILD_TESTS "Build test suites" OFF)
  option(XENIA_BUILD_MISC "Build misc subprojects (trace viewers, shader compiler, vfs-dump, demos)" OFF)
@@ -12,10 +12,16 @@ index 30febc4b7..7b7b7ad3c 100644
 +if(CHIMERA_HEADLESS)
 +  add_compile_definitions(CHIMERA_HEADLESS=1)
 +endif()
++# chimera: one thread at a time on a clock of the emulator's own
++# (src/xenia/base/threading_chimera.cc)
++option(CHIMERA_VSCHED "One thread at a time, on virtual time" OFF)
++if(CHIMERA_VSCHED)
++  add_compile_definitions(CHIMERA_VSCHED=1)
++endif()
  
  # Toggle profiler
  add_compile_definitions(XE_OPTION_PROFILING=0)
-@@ -248,6 +254,9 @@ else()
+@@ -248,6 +260,9 @@ else()
        pthread
      )
    elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -25,7 +31,7 @@ index 30febc4b7..7b7b7ad3c 100644
      # GTK3 via pkg-config
      find_package(PkgConfig REQUIRED)
      pkg_check_modules(GTK3 REQUIRED gtk+-x11-3.0)
-@@ -257,6 +266,7 @@ else()
+@@ -257,6 +272,7 @@ else()
  
      # Global Linux libraries
      link_libraries(stdc++fs dl lz4 pthread rt)
@@ -82,6 +88,25 @@ index f73d1e2bf..553877973 100644
  
  if(WIN32)
    add_subdirectory(apu/xaudio2)
+diff --git a/src/xenia/base/CMakeLists.txt b/src/xenia/base/CMakeLists.txt
+index 1f7a88d01..fc582b9dc 100644
+--- a/src/xenia/base/CMakeLists.txt
++++ b/src/xenia/base/CMakeLists.txt
+@@ -4,6 +4,14 @@ xe_platform_sources(xenia-base ${CMAKE_CURRENT_SOURCE_DIR})
+ file(GLOB _base_exclude   "${CMAKE_CURRENT_SOURCE_DIR}/console_app_main_*.cc"
+   "${CMAKE_CURRENT_SOURCE_DIR}/main_init_*.cc"
+ )
++# chimera: the threading layer is the host's or the scheduler's, never both
++if(CHIMERA_VSCHED)
++  list(APPEND _base_exclude
++    "${CMAKE_CURRENT_SOURCE_DIR}/threading_posix.cc"
++    "${CMAKE_CURRENT_SOURCE_DIR}/threading_timer_queue.cc")
++else()
++  list(APPEND _base_exclude "${CMAKE_CURRENT_SOURCE_DIR}/threading_chimera.cc")
++endif()
+ get_target_property(_base_srcs xenia-base SOURCES)
+ if(_base_exclude AND _base_srcs)
+   list(REMOVE_ITEM _base_srcs ${_base_exclude})
 diff --git a/src/xenia/ui/CMakeLists.txt b/src/xenia/ui/CMakeLists.txt
 index fc0d69f85..67c7c4f3b 100644
 --- a/src/xenia/ui/CMakeLists.txt

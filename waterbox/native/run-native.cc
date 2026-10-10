@@ -12,6 +12,7 @@
 #include <thread>
 
 #include "xenia/apu/nop/nop_audio_system.h"
+#include "xenia/base/chimera_vsched.h"
 #include "xenia/base/console_app_main.h"
 #include "xenia/base/cvar.h"
 #include "xenia/base/logging.h"
@@ -95,7 +96,13 @@ int RunNative(const std::vector<std::string>& args) {
   uint32_t last = 0;
   const uint32_t seconds = static_cast<uint32_t>(std::strtoul(cvars::seconds.c_str(), nullptr, 10));
   for (uint32_t second = 1; second <= seconds; second++) {
+#ifdef CHIMERA_VSCHED
+    // A second of the machine's time: this thread is one of the schedule's,
+    // and sleeping on the host's clock would hold everybody up.
+    xe::chimera::SleepUntil(static_cast<int64_t>(second) * 1000000000ll);
+#else
     std::this_thread::sleep_for(std::chrono::seconds(1));
+#endif
     const uint32_t swaps = gs && gs->command_processor() ? gs->command_processor()->counter() : 0;
     std::fprintf(stderr, "run-native: second %u, %u frames (%u this second)\n", second, swaps, swaps - last);
     last = swaps;
@@ -103,6 +110,10 @@ int RunNative(const std::vector<std::string>& args) {
 
   const uint32_t swaps = gs && gs->command_processor() ? gs->command_processor()->counter() : 0;
   std::printf("launched=%d\n", launched ? 1 : 0);
+#ifdef CHIMERA_VSCHED
+  std::printf("virtualNs=%lld\n", static_cast<long long>(xe::chimera::VirtualNanoseconds()));
+  std::printf("switches=%llu\n", static_cast<unsigned long long>(xe::chimera::Switches()));
+#endif
   std::printf("frames=%u\n", swaps);
   // The console's 512 MiB, as the machine sees them. Read while the guest
   // runs, so this is a sign of life and not yet a digest to compare.

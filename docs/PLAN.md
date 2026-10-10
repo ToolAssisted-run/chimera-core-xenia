@@ -75,8 +75,9 @@ exist.
   instruction tests on it, and a driver that boots a game with no window
   (all below). It is a reference that runs, not yet one that repeats: the
   clock and the threads are still the host's.
-- **M1 - virtual time.** A scheduler behind `xe::threading`, a charge per
-  block in the x64 emitter, the clock from it.
+- **M1 - virtual time.** DONE 2026-10-10 on the native build, for the one
+  game there is and thirty seconds of it (below): a scheduler behind
+  `xe::threading`, a charge per block in the x64 emitter, the clock from it.
 - **M2 - the guest build.** The JIT's tables and the memory views.
 - **M3 - savestates, input, lag.**
 - **M4 - the picture**, through the Vulkan bridge.
@@ -149,6 +150,82 @@ reference renderer may not. And the device extensions the Vulkan renderer
 turned on here - conditional rendering, custom border colour, fragment shader
 interlock, memory budget, non-seamless cube map, shader stencil export - are
 all ones the bridge offers.
+
+## M1: one thread at a time on one clock (2026-10-10)
+
+Patch 0003. `build/vsched` is the same sources with `CHIMERA_VSCHED`; the
+host-thread tree (`build/native`) still builds and is what upstream's
+instruction tests run on.
+
+**The scheduler** (`base/threading_chimera.cc`) replaces the POSIX threading
+backend and the timer queue. Every thread is still a host thread with its own
+stack, but exactly one runs: it holds a baton and gives it up only by asking
+the scheduler for something - a wait, a sleep, a yield, its own end. Who gets
+it next is the first thread after it, in order of creation, that can run.
+Time is a number only the scheduler moves: a fixed cost for every wait or
+yield (a microsecond, so that a loop that only polls still makes time pass),
+the instructions guest code ran, and a jump to the earliest deadline when
+nobody can run. A waiting thread remembers what it waits for and is asked
+when the baton is passed, so there are no wake-up lists to get wrong; that
+is a scan of every thread at every switch and will want replacing when it
+shows up in a profile.
+
+**What else waited on the host, each found as a hang and read off a
+debugger** (the run stops with every thread parked, or with one thread that
+never lets go):
+
+- The logger. Its writer thread waits for lines by spinning on the host.
+  With the scheduler a line is written by whoever logs it; a log must never
+  be what the machine waits for.
+- `std::mutex`, `std::recursive_mutex` and the two condition variables, 140
+  uses in 32 files, and Xenia's own lock types on top of them. A thread that
+  finds a lock taken, or waits on a condition, slept on the host holding the
+  baton, and the thread that would have woken it never ran. They are now
+  `xe::sync::` types (`base/chimera_sync.h`): the standard ones without the
+  scheduler, and with it a flag and a wait in the scheduler. The first one
+  met was the kernel's dispatch thread.
+- The steady clock. Deadlines were made by asking the host what time it
+  was; `XE_STEADY_NOW()` is the machine's time on the same scale.
+- The system clock: the machine is switched on at 2010-01-01 00:00:00 UTC.
+- `logical_processor_count()`: six, whatever the host has.
+
+**The recompiler pays for what it runs.** With one thread running, a guest
+thread that never asks the scheduler for anything keeps the baton for ever -
+the game's main thread did exactly that, in recompiled code. Each block now
+takes its guest instruction count from the running thread's slice (one
+global: only one thread runs) and calls the scheduler when the slice is
+spent: `mov rax, &budget; sub [rax], n; jns` at the top of every block. A
+slice is 100,000 instructions, and an instruction is 250 picoseconds of the
+machine's one clock (`CHIMERA_INSTRUCTION_PS`) - both first guesses, neither
+tuned. All six hardware threads' instructions move the same clock, so that
+figure stands for everything the console does in a second, not for one of
+its cores.
+
+**Measured** (Mirror's Edge, null renderer, each run a new process, address
+space layout randomisation left on):
+
+| the machine's time | runs | baton handed over | frames | 512 MiB of RAM |
+| --- | --- | --- | --- | --- |
+| 5 s | 3, and 2 more from a tree rebuilt from the patches | 257,171 | 437 | ed611adef65dbf20, every time |
+| 30 s | 2 | 1,778,448 | 2680 | 489c3a26d743dc0b, both |
+| 5 s, an instruction costing 260 ps | 1 | 254,075 | 436 | 50af94a76d29de60 |
+
+`waterbox/run-gate.sh` holds the first row and the last (`game:repeats`):
+two runs are one run, and a run with another instruction cost is another.
+
+Thirty seconds of the machine's time took 176 on the host, at the lowest
+priority beside other work: about a sixth of real time. Nothing has been
+done about speed; the instruction cost alone decides how much the host must
+execute per second of the machine's time.
+
+**Not established.** That it holds past thirty seconds, in a menu, in play,
+or with input - there is no input yet. That it holds with the Vulkan
+renderer, whose host threads are the driver's and are not in the schedule.
+That the picture is right: none has been looked at. And three kinds of host
+thread are still outside the schedule and have not been met yet because the
+null renderer and this stretch of the game do not use them: the Vulkan
+pipeline compilers, the audio media player's worker, and FFmpeg's own.
+Priorities and affinities are recorded and ignored.
 
 ## The recompiler's own tests (2026-10-10)
 

@@ -1,0 +1,2923 @@
+diff --git a/src/xenia/apu/audio_system.cc b/src/xenia/apu/audio_system.cc
+index fb66ee9ab..a4e533d8d 100644
+--- a/src/xenia/apu/audio_system.cc
++++ b/src/xenia/apu/audio_system.cc
+@@ -7,6 +7,8 @@
+  ******************************************************************************
+  */
+ 
++#include "xenia/base/chimera_sync.h"
++#include "xenia/base/chimera_vsched.h"
+ #include "xenia/apu/audio_system.h"
+ 
+ #include <limits>
+@@ -104,7 +106,7 @@ void AudioSystem::WorkerThreadMain() {
+   while (worker_running_) {
+     const uint64_t now = static_cast<uint64_t>(
+         std::chrono::duration_cast<std::chrono::microseconds>(
+-            std::chrono::steady_clock::now().time_since_epoch())
++            XE_STEADY_NOW().time_since_epoch())
+             .count());
+ 
+     size_t client_index = kMaximumClientCount;
+@@ -164,7 +166,7 @@ void AudioSystem::WorkerThreadMain() {
+ 
+       const uint64_t now_precise = static_cast<uint64_t>(
+           std::chrono::duration_cast<std::chrono::microseconds>(
+-              std::chrono::steady_clock::now().time_since_epoch())
++              XE_STEADY_NOW().time_since_epoch())
+               .count());
+       if (wake_target_us > now_precise) {
+         xe::threading::NanoSleepPrecise((wake_target_us - now_precise) * 1000);
+@@ -176,7 +178,7 @@ void AudioSystem::WorkerThreadMain() {
+         xe::threading::Wait(client_semaphores_[client_index].get(), false,
+                             std::chrono::milliseconds(0)) ==
+             xe::threading::WaitResult::kSuccess) {
+-      std::lock_guard<std::mutex> guard(clients_[client_index].lock);
++      std::lock_guard<xe::sync::mutex> guard(clients_[client_index].lock);
+ 
+       if (clients_[client_index].driver == nullptr) {
+         continue;
+@@ -310,7 +312,7 @@ void AudioSystem::UnregisterClient(size_t index) {
+   auto global_lock = global_critical_region_.Acquire();
+   assert_true(index < kMaximumClientCount);
+ 
+-  std::lock_guard<std::mutex> guard(clients_[index].lock);
++  std::lock_guard<xe::sync::mutex> guard(clients_[index].lock);
+ 
+   DestroyDriver(clients_[index].driver);
+   memory()->SystemHeapFree(clients_[index].wrapped_callback_arg);
+diff --git a/src/xenia/apu/audio_system.h b/src/xenia/apu/audio_system.h
+index 1a715e4bb..eec0dd6d0 100644
+--- a/src/xenia/apu/audio_system.h
++++ b/src/xenia/apu/audio_system.h
+@@ -12,6 +12,7 @@
+ 
+ #include <atomic>
+ 
++#include "xenia/base/chimera_sync.h"
+ #include "xenia/base/mutex.h"
+ #include "xenia/base/threading.h"
+ #include "xenia/cpu/processor.h"
+@@ -89,7 +90,7 @@ class AudioSystem {
+     uint32_t callback_arg;
+     uint32_t wrapped_callback_arg;
+     bool in_use;
+-    std::mutex lock;
++    xe::sync::mutex lock;
+   } clients_[kMaximumClientCount];
+ 
+   int FindFreeClient();
+diff --git a/src/xenia/base/chimera_sync.h b/src/xenia/base/chimera_sync.h
+new file mode 100644
+index 000000000..563a386a3
+--- /dev/null
++++ b/src/xenia/base/chimera_sync.h
+@@ -0,0 +1,206 @@
++// chimera: locks and condition variables that wait in the scheduler.
++//
++// With one thread running at a time (threading_chimera.cc), a lock is a flag:
++// nothing can come between testing it and setting it. What a lock must NOT do
++// is put its thread to sleep on the host when it finds the flag set - that
++// thread holds the baton, and the one that would clear the flag never runs
++// again. So a contended lock, and a condition variable, wait where every
++// other wait does, and the scheduler runs somebody else.
++//
++// Without the scheduler these are the standard library's own.
++#ifndef XENIA_BASE_CHIMERA_SYNC_H_
++#define XENIA_BASE_CHIMERA_SYNC_H_
++
++#include <chrono>
++#include <condition_variable>
++#include <cstdint>
++#include <mutex>
++
++#include "xenia/base/chimera_vsched.h"
++
++namespace xe {
++namespace sync {
++
++#ifdef CHIMERA_VSCHED
++
++class mutex {
++ public:
++  mutex() = default;
++  mutex(const mutex&) = delete;
++  mutex& operator=(const mutex&) = delete;
++  void lock() {
++    if (locked_) {
++      chimera::WaitFor([this] { return !locked_; }, INT64_MAX);
++    }
++    locked_ = true;
++  }
++  void unlock() { locked_ = false; }
++  bool try_lock() {
++    if (locked_) {
++      return false;
++    }
++    locked_ = true;
++    return true;
++  }
++
++ private:
++  bool locked_ = false;
++};
++
++class recursive_mutex {
++ public:
++  recursive_mutex() = default;
++  recursive_mutex(const recursive_mutex&) = delete;
++  recursive_mutex& operator=(const recursive_mutex&) = delete;
++  void lock() {
++    const void* me = chimera::CurrentThread();
++    if (owner_ == me) {
++      count_++;
++      return;
++    }
++    if (owner_) {
++      chimera::WaitFor([this] { return owner_ == nullptr; }, INT64_MAX);
++    }
++    owner_ = me;
++    count_ = 1;
++  }
++  void unlock() {
++    if (--count_ == 0) {
++      owner_ = nullptr;
++    }
++  }
++  bool try_lock() {
++    const void* me = chimera::CurrentThread();
++    if (owner_ && owner_ != me) {
++      return false;
++    }
++    owner_ = me;
++    count_++;
++    return true;
++  }
++
++ private:
++  const void* owner_ = nullptr;
++  uint32_t count_ = 0;
++};
++
++// notify_one lets one waiter go, notify_all every waiter there is; a waiter
++// that arrives afterwards waits. A wake-up with nothing to show for it is
++// allowed, as it is of the standard one.
++class condition_variable_any {
++ public:
++  condition_variable_any() = default;
++  condition_variable_any(const condition_variable_any&) = delete;
++  condition_variable_any& operator=(const condition_variable_any&) = delete;
++
++  void notify_one() {
++    if (tokens_ < waiters_) {
++      tokens_++;
++    }
++  }
++  void notify_all() {
++    generation_++;
++    tokens_ = 0;
++  }
++
++  template <typename Lock>
++  void wait(Lock& lock) {
++    WaitUntilNs(lock, INT64_MAX);
++  }
++  template <typename Lock, typename Predicate>
++  void wait(Lock& lock, Predicate predicate) {
++    while (!predicate()) {
++      WaitUntilNs(lock, INT64_MAX);
++    }
++  }
++  template <typename Lock, typename Rep, typename Period>
++  std::cv_status wait_for(Lock& lock,
++                          const std::chrono::duration<Rep, Period>& time) {
++    return WaitUntilNs(lock, DeadlineAfter(time)) ? std::cv_status::no_timeout
++                                                  : std::cv_status::timeout;
++  }
++  template <typename Lock, typename Rep, typename Period, typename Predicate>
++  bool wait_for(Lock& lock, const std::chrono::duration<Rep, Period>& time,
++                Predicate predicate) {
++    const int64_t deadline = DeadlineAfter(time);
++    while (!predicate()) {
++      if (!WaitUntilNs(lock, deadline)) {
++        return predicate();
++      }
++    }
++    return true;
++  }
++  // A moment on the steady clock is a moment of the machine's time
++  // (XE_STEADY_NOW).
++  template <typename Lock, typename Duration>
++  std::cv_status wait_until(
++      Lock& lock,
++      const std::chrono::time_point<std::chrono::steady_clock, Duration>& t) {
++    return WaitUntilNs(lock, Nanoseconds(t.time_since_epoch()))
++               ? std::cv_status::no_timeout
++               : std::cv_status::timeout;
++  }
++  template <typename Lock, typename Duration, typename Predicate>
++  bool wait_until(
++      Lock& lock,
++      const std::chrono::time_point<std::chrono::steady_clock, Duration>& t,
++      Predicate predicate) {
++    const int64_t deadline = Nanoseconds(t.time_since_epoch());
++    while (!predicate()) {
++      if (!WaitUntilNs(lock, deadline)) {
++        return predicate();
++      }
++    }
++    return true;
++  }
++
++ private:
++  template <typename D>
++  static int64_t Nanoseconds(const D& d) {
++    return std::chrono::duration_cast<std::chrono::nanoseconds>(d).count();
++  }
++  template <typename D>
++  static int64_t DeadlineAfter(const D& d) {
++    const int64_t ns = Nanoseconds(d);
++    const int64_t now = chimera::VirtualNanoseconds();
++    return ns <= 0 ? now : (ns > INT64_MAX - now ? INT64_MAX : now + ns);
++  }
++  // False when the deadline came first.
++  template <typename Lock>
++  bool WaitUntilNs(Lock& lock, int64_t deadline) {
++    const uint64_t generation = generation_;
++    waiters_++;
++    lock.unlock();
++    const bool woken = chimera::WaitFor(
++        [this, generation] { return generation_ != generation || tokens_; },
++        deadline);
++    if (woken && generation_ == generation) {
++      tokens_--;
++    }
++    waiters_--;
++    if (tokens_ > waiters_) {
++      tokens_ = waiters_;
++    }
++    lock.lock();
++    return woken;
++  }
++
++  uint64_t generation_ = 0;
++  uint32_t waiters_ = 0;
++  uint32_t tokens_ = 0;
++};
++using condition_variable = condition_variable_any;
++
++#else  // !CHIMERA_VSCHED
++
++using mutex = std::mutex;
++using recursive_mutex = std::recursive_mutex;
++using condition_variable = std::condition_variable;
++using condition_variable_any = std::condition_variable_any;
++
++#endif  // CHIMERA_VSCHED
++
++}  // namespace sync
++}  // namespace xe
++
++#endif  // XENIA_BASE_CHIMERA_SYNC_H_
+diff --git a/src/xenia/base/chimera_vsched.h b/src/xenia/base/chimera_vsched.h
+new file mode 100644
+index 000000000..4639abe70
+--- /dev/null
++++ b/src/xenia/base/chimera_vsched.h
+@@ -0,0 +1,58 @@
++// chimera: the one clock, and what moves it (threading_chimera.cc).
++#ifndef XENIA_BASE_CHIMERA_VSCHED_H_
++#define XENIA_BASE_CHIMERA_VSCHED_H_
++
++#include <chrono>
++#include <cstdint>
++#include <functional>
++
++namespace xe {
++namespace chimera {
++
++// The machine's time, in nanoseconds since it was switched on.
++int64_t VirtualNanoseconds();
++
++// Time passes for whoever is running: what guest code charges for the
++// instructions it ran.
++void Charge(int64_t ns);
++
++// Let the next thread that can run, run.
++void Yield();
++
++// Sleep until a moment of the machine's time.
++void SleepUntil(int64_t ns);
++
++// Wait, in the scheduler, until `ready` says so or the machine's time reaches
++// `deadline_ns` (INT64_MAX: for ever). True when ready, false when the deadline
++// came first. `ready` is asked whenever the baton is passed and must only
++// read.
++bool WaitFor(const std::function<bool()>& ready, int64_t deadline_ns);
++
++// Which thread is running: a name for it, good for comparing.
++const void* CurrentThread();
++
++// What is left of the running thread's slice, in guest instructions. The
++// recompiler takes each block's count from it (one global: only one thread
++// runs) and calls BudgetSpent when it goes below zero. The scheduler turns
++// what was taken into time whenever it is asked anything.
++extern int64_t g_instruction_budget;
++uint64_t BudgetSpent(void* raw_context);
++
++// How many times the baton has been handed over.
++uint64_t Switches();
++
++// The machine's time as a moment on the steady clock's scale: what everything
++// that asked the host "what time is it" asks instead.
++std::chrono::steady_clock::time_point SteadyNow();
++
++}  // namespace chimera
++}  // namespace xe
++
++// "What time is it", for code that used to ask the host's steady clock.
++#ifdef CHIMERA_VSCHED
++#define XE_STEADY_NOW() ::xe::chimera::SteadyNow()
++#else
++#define XE_STEADY_NOW() ::std::chrono::steady_clock::now()
++#endif
++
++#endif  // XENIA_BASE_CHIMERA_VSCHED_H_
+diff --git a/src/xenia/base/chrono_steady_cast.h b/src/xenia/base/chrono_steady_cast.h
+index a99fc4dd8..6d4ab16fb 100644
+--- a/src/xenia/base/chrono_steady_cast.h
++++ b/src/xenia/base/chrono_steady_cast.h
+@@ -13,6 +13,7 @@
+ #include <atomic>
+ #include <limits>
+ 
++#include "xenia/base/chimera_vsched.h"
+ #include "xenia/base/chrono.h"
+ #include "xenia/base/math.h"
+ 
+@@ -45,7 +46,7 @@ struct clock_time_conversion<::xe::chrono::WinSystemClock,
+     // conversion error: error = sty_tpoint -
+     // clock_cast<sty>(clock_cast<nt>(sty_tpoint));
+     std::atomic_thread_fence(std::memory_order_acq_rel);
+-    auto steady_now = steady_clock_::now();
++    auto steady_now = XE_STEADY_NOW();
+     auto nt_now = WinSystemClock_::now();
+     std::atomic_thread_fence(std::memory_order_acq_rel);
+ 
+@@ -64,7 +65,7 @@ struct clock_time_conversion<std::chrono::steady_clock,
+   steady_clock_::time_point operator()(
+       const std::chrono::time_point<WinSystemClock_, Duration>& t) const {
+     std::atomic_thread_fence(std::memory_order_acq_rel);
+-    auto steady_now = steady_clock_::now();
++    auto steady_now = XE_STEADY_NOW();
+     auto nt_now = WinSystemClock_::now();
+     std::atomic_thread_fence(std::memory_order_acq_rel);
+ 
+diff --git a/src/xenia/base/clock.cc b/src/xenia/base/clock.cc
+index cd9e23674..e8909bd04 100644
+--- a/src/xenia/base/clock.cc
++++ b/src/xenia/base/clock.cc
+@@ -7,6 +7,7 @@
+  ******************************************************************************
+  */
+ 
++#include "xenia/base/chimera_sync.h"
+ #include "xenia/base/clock.h"
+ 
+ #include <mutex>
+@@ -57,10 +58,10 @@ uint64_t last_guest_tick_count_ = 0;
+ // Last sampled host tick count.
+ uint64_t last_host_tick_count_ = Clock::QueryHostTickCount();
+ 
+-using tick_mutex_type = std::mutex;
++using tick_mutex_type = xe::sync::mutex;
+ 
+ // Mutex to ensure last_host_tick_count_ and last_guest_tick_count_ are in sync
+-// std::mutex tick_mutex_;
++// xe::sync::mutex tick_mutex_;
+ static tick_mutex_type tick_mutex_;
+ 
+ static void RecomputeGuestSystemTimeRatio() {
+diff --git a/src/xenia/base/clock_posix.cc b/src/xenia/base/clock_posix.cc
+index cbe0fff85..8e22471ed 100644
+--- a/src/xenia/base/clock_posix.cc
++++ b/src/xenia/base/clock_posix.cc
+@@ -14,10 +14,16 @@
+ 
+ #include "xenia/base/assert.h"
+ #include "xenia/base/clock.h"
++#ifdef CHIMERA_VSCHED
++#include "xenia/base/chimera_vsched.h"
++#endif
+ 
+ namespace xe {
+ 
+ uint64_t Clock::host_tick_frequency_platform() {
++#ifdef CHIMERA_VSCHED
++  return 1000000000ull;  // chimera: the clock is the scheduler's nanoseconds
++#endif
+ #ifdef __APPLE__
+   mach_timebase_info_data_t info;
+   mach_timebase_info(&info);
+@@ -35,6 +41,9 @@ uint64_t Clock::host_tick_frequency_platform() {
+ }
+ 
+ uint64_t Clock::host_tick_count_platform() {
++#ifdef CHIMERA_VSCHED
++  return static_cast<uint64_t>(chimera::VirtualNanoseconds());
++#endif
+ #ifdef __APPLE__
+   return mach_absolute_time();
+ #else
+@@ -52,6 +61,11 @@ uint64_t Clock::QueryHostSystemTime() {
+   // Don't forget the 89 leap days.
+   constexpr uint64_t seconds_1601_to_1970 =
+       ((369 * 365 + 89) * seconds_per_day);
++#ifdef CHIMERA_VSCHED
++  // chimera: the machine is switched on at 2010-01-01 00:00:00 UTC, always
++  return (1262304000ull + seconds_1601_to_1970) * 10000000ull +
++         static_cast<uint64_t>(chimera::VirtualNanoseconds()) / 100;
++#endif
+ 
+   timeval now;
+   int error = gettimeofday(&now, nullptr);
+diff --git a/src/xenia/base/delegate.h b/src/xenia/base/delegate.h
+index 3aa699192..0fb75c3ab 100644
+--- a/src/xenia/base/delegate.h
++++ b/src/xenia/base/delegate.h
+@@ -10,6 +10,7 @@
+ #ifndef XENIA_BASE_DELEGATE_H_
+ #define XENIA_BASE_DELEGATE_H_
+ 
++#include "xenia/base/chimera_sync.h"
+ #include <functional>
+ #include <mutex>
+ #include <vector>
+@@ -24,24 +25,24 @@ class Delegate {
+   typedef std::function<void(Args...)> Listener;
+ 
+   void AddListener(Listener const& listener) {
+-    std::lock_guard<std::mutex> guard(lock_);
++    std::lock_guard<xe::sync::mutex> guard(lock_);
+     listeners_.push_back(listener);
+   }
+ 
+   void RemoveAllListeners() {
+-    std::lock_guard<std::mutex> guard(lock_);
++    std::lock_guard<xe::sync::mutex> guard(lock_);
+     listeners_.clear();
+   }
+ 
+   void operator()(Args... args) {
+-    std::lock_guard<std::mutex> guard(lock_);
++    std::lock_guard<xe::sync::mutex> guard(lock_);
+     for (auto& listener : listeners_) {
+       listener(args...);
+     }
+   }
+ 
+  private:
+-  std::mutex lock_;
++  xe::sync::mutex lock_;
+   std::vector<Listener> listeners_;
+ };
+ 
+@@ -51,24 +52,24 @@ class Delegate<void> {
+   typedef std::function<void()> Listener;
+ 
+   void AddListener(Listener const& listener) {
+-    std::lock_guard<std::mutex> guard(lock_);
++    std::lock_guard<xe::sync::mutex> guard(lock_);
+     listeners_.push_back(listener);
+   }
+ 
+   void RemoveAllListeners() {
+-    std::lock_guard<std::mutex> guard(lock_);
++    std::lock_guard<xe::sync::mutex> guard(lock_);
+     listeners_.clear();
+   }
+ 
+   void operator()() {
+-    std::lock_guard<std::mutex> guard(lock_);
++    std::lock_guard<xe::sync::mutex> guard(lock_);
+     for (auto& listener : listeners_) {
+       listener();
+     }
+   }
+ 
+  private:
+-  std::mutex lock_;
++  xe::sync::mutex lock_;
+   std::vector<Listener> listeners_;
+ };
+ 
+diff --git a/src/xenia/base/logging.cc b/src/xenia/base/logging.cc
+index d2dc834d4..d650a014d 100644
+--- a/src/xenia/base/logging.cc
++++ b/src/xenia/base/logging.cc
+@@ -226,15 +226,19 @@ class Logger {
+         consumed_(wait_strategy_) {
+     claim_strategy_.add_claim_barrier(consumed_);
+ 
++#ifndef CHIMERA_VSCHED
+     write_thread_ =
+         xe::threading::Thread::Create({}, [this]() { WriteThread(); });
+     assert_not_null(write_thread_);
+     write_thread_->set_name("Logging Writer");
++#endif
+   }
+ 
+   ~Logger() {
++#ifndef CHIMERA_VSCHED
+     AppendLine(0, '\0', nullptr, 0, true);  // append a terminator
+     xe::threading::Wait(write_thread_.get(), true);
++#endif
+   }
+ 
+   void AddLogSink(std::unique_ptr<LogSink>&& sink) {
+@@ -408,6 +412,28 @@ class Logger {
+   void AppendLine(uint32_t thread_id, const char prefix_char,
+                   const char* buffer_data, size_t buffer_length,
+                   bool terminate = false) {
++#ifdef CHIMERA_VSCHED
++    // chimera: a line is written by whoever logs it. The writer thread waits
++    // for lines by spinning on the host, which the one running thread may not
++    // do, and a log must never be what the machine waits for.
++    if (prefix_char) {
++      char prefix[16];
++      const auto end = fmt::format_to_n(prefix, sizeof(prefix) - 1,
++                                        "{}> {:08X} ", prefix_char, thread_id);
++      Write(prefix, static_cast<size_t>(end.out - prefix));
++    }
++    if (buffer_length) {
++      Write(buffer_data, buffer_length);
++    }
++    if (!buffer_length || buffer_data[buffer_length - 1] != '\n') {
++      constexpr char suffix[1] = {'\n'};
++      Write(suffix, 1);
++    }
++    if (cvars::flush_log) {
++      FlushAllSinks();
++    }
++    return;
++#endif
+     size_t count = BlockCount(sizeof(LogLine) + buffer_length);
+ 
+     auto range = claim_strategy_.claim(count);
+diff --git a/src/xenia/base/memory_posix.cc b/src/xenia/base/memory_posix.cc
+index 073de13fd..2cf2880a8 100644
+--- a/src/xenia/base/memory_posix.cc
++++ b/src/xenia/base/memory_posix.cc
+@@ -7,6 +7,7 @@
+  ******************************************************************************
+  */
+ 
++#include "xenia/base/chimera_sync.h"
+ #include "xenia/base/memory.h"
+ 
+ #include <fcntl.h>
+@@ -125,11 +126,11 @@ struct MappedFileRange {
+ };
+ 
+ std::vector<MappedFileRange> mapped_file_ranges;
+-std::mutex g_mapped_file_ranges_mutex;
++xe::sync::mutex g_mapped_file_ranges_mutex;
+ 
+ // Track shm file names for cleanup on exit
+ std::vector<std::string> g_shm_file_names;
+-std::mutex g_shm_file_names_mutex;
++xe::sync::mutex g_shm_file_names_mutex;
+ static bool g_cleanup_handlers_installed = false;
+ 
+ #if !XE_PLATFORM_ANDROID
+diff --git a/src/xenia/base/mutex.cc b/src/xenia/base/mutex.cc
+index 09b671a41..2d02a0515 100644
+--- a/src/xenia/base/mutex.cc
++++ b/src/xenia/base/mutex.cc
+@@ -18,7 +18,9 @@
+ #endif
+ 
+ namespace xe {
+-#if XE_PLATFORM_WIN32 == 1 && XE_ENABLE_FAST_WIN32_MUTEX == 1
++#ifdef CHIMERA_VSCHED
++// chimera: the lock types are chimera_sync.h's; nothing to define here
++#elif XE_PLATFORM_WIN32 == 1 && XE_ENABLE_FAST_WIN32_MUTEX == 1
+ 
+ // xe_global_mutex: recursive mutex via SRWLOCK
+ void xe_global_mutex::lock() {
+diff --git a/src/xenia/base/mutex.h b/src/xenia/base/mutex.h
+index aa15e34e0..e3f78d331 100644
+--- a/src/xenia/base/mutex.h
++++ b/src/xenia/base/mutex.h
+@@ -19,11 +19,19 @@
+ #include <sys/types.h>
+ #endif
+ #include "memory.h"
++#include "xenia/base/chimera_sync.h"
+ #define XE_ENABLE_FAST_WIN32_MUTEX 1
+ #define XE_ENABLE_FAST_LINUX_MUTEX 1
+ namespace xe {
+ 
+-#if XE_PLATFORM_WIN32 == 1 && XE_ENABLE_FAST_WIN32_MUTEX == 1
++#ifdef CHIMERA_VSCHED
++// chimera: every lock waits in the scheduler (chimera_sync.h)
++using xe_global_mutex = sync::recursive_mutex;
++using global_mutex_type = sync::recursive_mutex;
++using xe_fast_mutex = sync::mutex;
++using xe_unlikely_mutex = sync::mutex;
++using xe_mutex = sync::mutex;
++#elif XE_PLATFORM_WIN32 == 1 && XE_ENABLE_FAST_WIN32_MUTEX == 1
+ // Recursive mutex using SRWLOCK.
+ class alignas(4096) xe_global_mutex {
+   SRWLOCK srwlock_ = SRWLOCK_INIT;
+diff --git a/src/xenia/base/threading.cc b/src/xenia/base/threading.cc
+index 98c91715e..0c4ad42f9 100644
+--- a/src/xenia/base/threading.cc
++++ b/src/xenia/base/threading.cc
+@@ -13,6 +13,11 @@ namespace xe {
+ namespace threading {
+ 
+ uint32_t logical_processor_count() {
++#ifdef CHIMERA_VSCHED
++  // chimera: what the machine is said to have. The host's count would size
++  // thread pools by the host.
++  return 6;
++#endif
+   static uint32_t value = 0;
+   if (!value) {
+     value = std::thread::hardware_concurrency();
+diff --git a/src/xenia/base/threading.h b/src/xenia/base/threading.h
+index a0cae20e2..029311833 100644
+--- a/src/xenia/base/threading.h
++++ b/src/xenia/base/threading.h
+@@ -29,6 +29,7 @@
+ #include "xenia/base/literals.h"
+ #include "xenia/base/platform.h"
+ #include "xenia/base/threading_timer_queue.h"
++#include "xenia/base/chimera_vsched.h"
+ 
+ namespace xe {
+ namespace threading {
+@@ -41,6 +42,7 @@ void AndroidShutdown();
+ #endif
+ 
+ // This is more like an Event with self-reset when returning from Wait()
++#ifndef CHIMERA_VSCHED  // chimera: the scheduler's own is at the end of this file
+ class Fence {
+  public:
+   Fence() : signal_state_(0) {}
+@@ -86,6 +88,7 @@ class Fence {
+   // waiting threads. Protected by mutex_.
+   state_t_ signal_state_;
+ };
++#endif  // !CHIMERA_VSCHED
+ 
+ // Returns the total number of logical processors in the host system.
+ uint32_t logical_processor_count();
+@@ -160,7 +163,7 @@ class HighResolutionTimer {
+     assert_not_null(callback);
+     wait_item_ = QueueTimerRecurring(
+         [callback = std::move(callback)](void*) { callback(); }, nullptr,
+-        TimerQueueWaitItem::clock::now(), interval);
++        XE_STEADY_NOW(), interval);
+   }
+ 
+  public:
+@@ -497,6 +500,27 @@ class Thread : public WaitHandle {
+   std::string name_;
+ };
+ 
++#ifdef CHIMERA_VSCHED
++// chimera: a fence that waits in the scheduler. The host's mutex and
++// condition variable would put the only running thread to sleep.
++class Fence {
++ public:
++  Fence() : event_(Event::CreateManualResetEvent(false)) {}
++  void Signal() { event_->Set(); }
++  void Wait() {
++    waiting_++;
++    threading::Wait(event_.get(), false);
++    if (--waiting_ == 0) {
++      event_->Reset();
++    }
++  }
++
++ private:
++  std::unique_ptr<Event> event_;
++  uint32_t waiting_ = 0;
++};
++#endif  // CHIMERA_VSCHED
++
+ }  // namespace threading
+ }  // namespace xe
+ 
+diff --git a/src/xenia/base/threading_chimera.cc b/src/xenia/base/threading_chimera.cc
+new file mode 100644
+index 000000000..8e27b118c
+--- /dev/null
++++ b/src/xenia/base/threading_chimera.cc
+@@ -0,0 +1,959 @@
++// chimera: the threading layer on one clock.
++//
++// Upstream's threads are the host's, and time is the host's. Here every
++// thread is still a host thread - each has its own stack, and nothing about
++// the code that runs on it changes - but exactly ONE of them runs at a time.
++// The running thread holds the baton and gives it up only by asking this file
++// for something: to wait, to sleep, to yield, to end. Who gets it next is
++// decided by a rule that reads nothing from the host (round robin in order of
++// creation), and time is a number that only this file moves:
++//
++//   - a thread that waits or yields is charged a fixed cost, so that a loop
++//     that only polls still makes time pass;
++//   - whatever runs guest code charges for the instructions it ran
++//     (xe::chimera::Charge);
++//   - when nobody can run, time jumps to the earliest moment somebody can.
++//
++// So two runs of the same program do the same things in the same order at the
++// same times, whatever the host is doing.
++//
++// What a thread waits for is not kept in lists per object. A waiting thread
++// remembers what it is waiting for, and each time the baton is passed the
++// candidates are asked, in order, whether they can go. That is slower than
++// queues and it cannot get a wake-up wrong.
++#include "xenia/base/threading.h"
++
++#include <pthread.h>
++
++#include <algorithm>
++#include <cinttypes>
++#include <condition_variable>
++#include <cstdio>
++#include <cstdlib>
++#include <deque>
++#include <mutex>
++#include <vector>
++
++#include "xenia/base/assert.h"
++#include "xenia/base/chimera_vsched.h"
++#include "xenia/base/chrono.h"
++#include "xenia/base/threading_timer_queue.h"
++
++namespace xe {
++namespace threading {
++
++namespace {
++
++constexpr int64_t kNever = INT64_MAX;
++// How many guest instructions a thread runs before the next one gets a turn.
++constexpr int64_t kSliceInstructions = 100000;
++// What asking the scheduler for anything costs the asker.
++constexpr int64_t kYieldCostNs = 1000;
++
++struct VThread;
++
++// Something a thread can wait for.
++class VWaitable {
++ public:
++  virtual ~VWaitable() = default;
++  // Could this thread take it now?
++  virtual bool Signaled(const VThread* who) const = 0;
++  // Take it.
++  virtual void Acquire(VThread* who) = 0;
++};
++
++struct VThread {
++  // the host thread underneath, and what it sleeps on while it does not hold
++  // the baton
++  pthread_t host{};
++  std::condition_variable cv;
++  bool go = false;
++
++  uint32_t id = 0;
++  uint32_t logical_id = 0;  // set_current_thread_id
++  std::string name;
++  std::function<void()> start;
++  Thread* handle = nullptr;  // the object code holds for this thread, if any
++
++  bool dead = false;
++  bool blocked = false;
++  uint32_t suspend_count = 0;
++  int32_t priority = ThreadPriority::kNormal;
++  uint64_t affinity = ~uint64_t(0);
++
++  // what it is blocked on
++  std::vector<VWaitable*> waits;
++  bool wait_all = false;
++  bool alertable = false;
++  int64_t deadline = kNever;
++  WaitResult result = WaitResult::kSuccess;
++  size_t result_index = 0;
++
++  std::deque<std::function<void()>> callbacks;  // QueueUserCallback
++  uintptr_t tls[64] = {};
++};
++
++struct Sched {
++  std::mutex host;                // guards the handing over, nothing else
++  std::vector<VThread*> threads;  // in order of creation; the dead are removed
++  VThread* current = nullptr;
++  int64_t now = 0;
++  uint64_t switches = 0;
++  uint32_t next_id = 1;
++  uint64_t tls_used = 0;
++};
++
++Sched& S() {
++  static Sched* s = new Sched();
++  return *s;
++}
++
++// What a guest instruction costs, in picoseconds. One number for the whole
++// machine: every thread's instructions move the one clock, so this is the
++// reciprocal of everything the console's six hardware threads do in a
++// second. CHIMERA_INSTRUCTION_PS changes it, for a test to see that it
++// matters.
++int64_t InstructionPicoseconds() {
++  static int64_t value = 0;
++  if (!value) {
++    const char* text = std::getenv("CHIMERA_INSTRUCTION_PS");
++    value = text && *text ? std::strtoll(text, nullptr, 10) : 250;
++    if (value <= 0) {
++      value = 250;
++    }
++  }
++  return value;
++}
++
++// Turn the instructions the running thread has executed since the last time
++// into time, and give whoever runs next a whole slice.
++int64_t g_picosecond_remainder = 0;
++void Account() {
++  const int64_t used = kSliceInstructions - chimera::g_instruction_budget;
++  chimera::g_instruction_budget = kSliceInstructions;
++  if (used > 0) {
++    const int64_t ps = used * InstructionPicoseconds() + g_picosecond_remainder;
++    S().now += ps / 1000;
++    g_picosecond_remainder = ps % 1000;
++  }
++}
++
++class ChimeraThread;
++VThread* Adopt(const char* name);
++
++// The thread that is running: the one that holds the baton. The first thread
++// of the process joins the schedule the first time it asks.
++VThread* Self() {
++  VThread* self = S().current;
++  return self ? self : Adopt("main");
++}
++
++[[noreturn]] void Deadlock() {
++  auto& s = S();
++  std::fprintf(stderr,
++               "chimera vsched: nobody can run and nobody is waiting for a "
++               "time (virtual time %" PRId64 " ns, %zu threads):\n",
++               s.now, s.threads.size());
++  for (const VThread* t : s.threads) {
++    std::fprintf(stderr, "  %3u %-28s %s%s waits=%zu%s\n", t->id,
++                 t->name.c_str(), t->blocked ? "blocked" : "ready",
++                 t->suspend_count ? " suspended" : "", t->waits.size(),
++                 t->alertable ? " alertable" : "");
++  }
++  std::fflush(stderr);
++  std::abort();
++}
++
++// Can this thread run now? A blocked thread that can is unblocked here, with
++// the result of its wait.
++bool Runnable(VThread* t) {
++  if (t->dead || t->suspend_count) {
++    return false;
++  }
++  if (!t->blocked) {
++    return true;
++  }
++  if (t->alertable && !t->callbacks.empty()) {
++    t->result = WaitResult::kUserCallback;
++    t->blocked = false;
++    return true;
++  }
++  if (!t->waits.empty()) {
++    if (t->wait_all) {
++      bool all = true;
++      for (const VWaitable* w : t->waits) {
++        all = all && w->Signaled(t);
++      }
++      if (all) {
++        for (VWaitable* w : t->waits) {
++          w->Acquire(t);
++        }
++        t->result = WaitResult::kSuccess;
++        t->result_index = 0;
++        t->blocked = false;
++        return true;
++      }
++    } else {
++      for (size_t i = 0; i < t->waits.size(); i++) {
++        if (t->waits[i]->Signaled(t)) {
++          t->waits[i]->Acquire(t);
++          t->result = WaitResult::kSuccess;
++          t->result_index = i;
++          t->blocked = false;
++          return true;
++        }
++      }
++    }
++  }
++  if (S().now >= t->deadline) {
++    t->result = WaitResult::kTimeout;
++    t->blocked = false;
++    return true;
++  }
++  return false;
++}
++
++// Who runs next: the first thread after this one, in order of creation, that
++// can. When none can, time moves to the earliest deadline and the question
++// is asked again.
++VThread* PickNext(VThread* after) {
++  auto& s = S();
++  for (;;) {
++    const size_t n = s.threads.size();
++    size_t start = 0;
++    for (size_t i = 0; i < n; i++) {
++      if (s.threads[i] == after) {
++        start = i + 1;
++        break;
++      }
++    }
++    for (size_t k = 0; k < n; k++) {
++      VThread* t = s.threads[(start + k) % n];
++      if (Runnable(t)) {
++        return t;
++      }
++    }
++    int64_t earliest = kNever;
++    for (const VThread* t : s.threads) {
++      if (!t->dead && !t->suspend_count && t->blocked) {
++        earliest = std::min(earliest, t->deadline);
++      }
++    }
++    if (earliest == kNever) {
++      Deadlock();
++    }
++    s.now = std::max(s.now, earliest);
++  }
++}
++
++// Hand the baton over and sleep until it comes back. A thread that is dead
++// does not wait for it.
++void SwitchTo(VThread* self, VThread* next) {
++  if (next == self) {
++    return;
++  }
++  auto& s = S();
++  s.switches++;
++  std::unique_lock<std::mutex> lock(s.host);
++  self->go = false;
++  s.current = next;
++  next->go = true;
++  next->cv.notify_one();
++  if (self->dead) {
++    return;
++  }
++  self->cv.wait(lock, [self] { return self->go; });
++}
++
++void RunCallbacks(VThread* self) {
++  while (!self->callbacks.empty()) {
++    auto callback = std::move(self->callbacks.front());
++    self->callbacks.pop_front();
++    callback();
++  }
++}
++
++void YieldNow(VThread* self) {
++  Account();
++  S().now += kYieldCostNs;
++  SwitchTo(self, PickNext(self));
++}
++
++// Block until something waited for can be taken, a callback is queued (when
++// alertable), or the deadline passes.
++WaitResult Block(VThread* self, VWaitable** waits, size_t count, bool wait_all,
++                 bool alertable, int64_t deadline, size_t* out_index) {
++  auto& s = S();
++  Account();
++  s.now += kYieldCostNs;
++  self->waits.assign(waits, waits + count);
++  self->wait_all = wait_all;
++  self->alertable = alertable;
++  self->deadline = deadline;
++  self->blocked = true;
++  SwitchTo(self, PickNext(self));
++  self->waits.clear();
++  self->deadline = kNever;
++  if (out_index) {
++    *out_index = self->result_index;
++  }
++  const WaitResult result = self->result;
++  if (result == WaitResult::kUserCallback) {
++    RunCallbacks(self);
++  }
++  return result;
++}
++
++int64_t DeadlineAfter(std::chrono::milliseconds timeout) {
++  if (timeout == std::chrono::milliseconds::max()) {
++    return kNever;
++  }
++  Account();
++  const int64_t ms = std::max<int64_t>(timeout.count(), 0);
++  if (ms > (kNever - S().now) / 1000000) {
++    return kNever;
++  }
++  return S().now + ms * 1000000;
++}
++
++void EndCurrent(VThread* self) {
++  auto& s = S();
++  self->dead = true;
++  self->blocked = false;
++  bool anyone = false;
++  for (const VThread* t : s.threads) {
++    anyone = anyone || !t->dead;
++  }
++  if (!anyone) {
++    // the last thread of the machine: there is nobody to hand over to
++    std::fflush(nullptr);
++    std::_Exit(0);
++  }
++  VThread* next = PickNext(self);
++  s.threads.erase(std::remove(s.threads.begin(), s.threads.end(), self),
++                  s.threads.end());
++  SwitchTo(self, next);
++}
++
++void* HostMain(void* arg) {
++  VThread* self = static_cast<VThread*>(arg);
++  {
++    std::unique_lock<std::mutex> lock(S().host);
++    self->cv.wait(lock, [self] { return self->go; });
++  }
++  self->start();
++  EndCurrent(self);
++  return nullptr;
++}
++
++// ---------------------------------------------------------------------------
++
++class ChimeraEvent final : public Event, public VWaitable {
++ public:
++  ChimeraEvent(bool manual, bool initial) : manual_(manual), set_(initial) {}
++  void* native_handle() const override {
++    return const_cast<VWaitable*>(static_cast<const VWaitable*>(this));
++  }
++  bool Signaled(const VThread*) const override { return set_; }
++  void Acquire(VThread*) override {
++    if (!manual_) {
++      set_ = false;
++    }
++  }
++  void Set() override { set_ = true; }
++  void Reset() override { set_ = false; }
++  // Whoever is waiting now goes (one of them, for an auto-reset event), and
++  // nobody who comes later does.
++  void Pulse() override {
++    set_ = true;
++    for (VThread* t : S().threads) {
++      if (!set_) {
++        break;
++      }
++      if (t->blocked &&
++          std::find(t->waits.begin(), t->waits.end(),
++                    static_cast<VWaitable*>(this)) != t->waits.end()) {
++        Runnable(t);
++      }
++    }
++    set_ = false;
++  }
++  EventInfo Query() override {
++    return EventInfo{manual_ ? 0u : 1u, set_ ? 1u : 0u};
++  }
++
++ private:
++  bool manual_;
++  bool set_;
++};
++
++class ChimeraSemaphore final : public Semaphore, public VWaitable {
++ public:
++  ChimeraSemaphore(int initial, int maximum) : count_(initial), max_(maximum) {}
++  void* native_handle() const override {
++    return const_cast<VWaitable*>(static_cast<const VWaitable*>(this));
++  }
++  bool Signaled(const VThread*) const override { return count_ > 0; }
++  void Acquire(VThread*) override { count_--; }
++  bool Release(int release_count, int* out_previous_count) override {
++    if (release_count <= 0 || count_ + release_count > max_) {
++      return false;
++    }
++    if (out_previous_count) {
++      *out_previous_count = count_;
++    }
++    count_ += release_count;
++    return true;
++  }
++
++ private:
++  int count_;
++  int max_;
++};
++
++class ChimeraMutant final : public Mutant, public VWaitable {
++ public:
++  explicit ChimeraMutant(bool initial_owner) {
++    if (initial_owner) {
++      owner_ = Self();
++      count_ = 1;
++    }
++  }
++  void* native_handle() const override {
++    return const_cast<VWaitable*>(static_cast<const VWaitable*>(this));
++  }
++  bool Signaled(const VThread* who) const override {
++    return owner_ == nullptr || owner_ == who;
++  }
++  void Acquire(VThread* who) override {
++    owner_ = who;
++    count_++;
++  }
++  bool Release() override {
++    if (owner_ != Self() || count_ == 0) {
++      return false;
++    }
++    if (--count_ == 0) {
++      owner_ = nullptr;
++    }
++    return true;
++  }
++
++ private:
++  const VThread* owner_ = nullptr;
++  uint32_t count_ = 0;
++};
++
++class ChimeraTimer final : public Timer, public VWaitable {
++ public:
++  explicit ChimeraTimer(bool manual) : manual_(manual) {}
++  ~ChimeraTimer() override { Cancel(); }
++  void* native_handle() const override {
++    return const_cast<VWaitable*>(static_cast<const VWaitable*>(this));
++  }
++  bool Signaled(const VThread*) const override { return signaled_; }
++  void Acquire(VThread*) override {
++    if (!manual_) {
++      signaled_ = false;
++    }
++  }
++
++  bool SetOnceAfter(xe::chrono::hundrednanoseconds rel_time,
++                    std::function<void()> opt_callback) override {
++    return Arm(chimera::SteadyNow() + rel_time, GClock_::duration::zero(),
++               std::move(opt_callback));
++  }
++  bool SetOnceAt(WClock_::time_point due_time,
++                 std::function<void()> opt_callback) override {
++    return Arm(FromSystem(due_time), GClock_::duration::zero(),
++               std::move(opt_callback));
++  }
++  bool SetOnceAt(GClock_::time_point due_time,
++                 std::function<void()> opt_callback) override {
++    return Arm(due_time, GClock_::duration::zero(), std::move(opt_callback));
++  }
++  bool SetRepeatingAfter(xe::chrono::hundrednanoseconds rel_time,
++                         std::chrono::milliseconds period,
++                         std::function<void()> opt_callback) override {
++    return Arm(chimera::SteadyNow() + rel_time, period,
++               std::move(opt_callback));
++  }
++  bool SetRepeatingAt(WClock_::time_point due_time,
++                      std::chrono::milliseconds period,
++                      std::function<void()> opt_callback) override {
++    return Arm(FromSystem(due_time), period, std::move(opt_callback));
++  }
++  bool SetRepeatingAt(GClock_::time_point due_time,
++                      std::chrono::milliseconds period,
++                      std::function<void()> opt_callback) override {
++    return Arm(due_time, period, std::move(opt_callback));
++  }
++  bool Cancel() override {
++    if (auto item = item_.lock()) {
++      item->Disarm();
++    }
++    item_.reset();
++    return true;
++  }
++
++ private:
++  // A moment on the system's clock, as a moment on the steady one: both are
++  // this file's time, so the distance from now is exact.
++  static GClock_::time_point FromSystem(WClock_::time_point due) {
++    return chimera::SteadyNow() +
++           std::chrono::duration_cast<GClock_::duration>(due - WClock_::now());
++  }
++  bool Arm(GClock_::time_point due, GClock_::duration period,
++           std::function<void()> callback) {
++    Cancel();
++    signaled_ = false;
++    callback_ = std::move(callback);
++    auto fire = [this](void*) {
++      signaled_ = true;
++      if (callback_) {
++        callback_();
++      }
++    };
++    item_ = period == GClock_::duration::zero()
++                ? QueueTimerOnce(fire, nullptr, due)
++                : QueueTimerRecurring(fire, nullptr, due, period);
++    return true;
++  }
++
++  bool manual_;
++  bool signaled_ = false;
++  std::function<void()> callback_;
++  std::weak_ptr<TimerQueueWaitItem> item_;
++};
++
++class ChimeraThread final : public Thread, public VWaitable {
++ public:
++  explicit ChimeraThread(VThread* thread) : thread_(thread) {
++    thread_->handle = this;
++    name_ = thread_->name;
++  }
++  ~ChimeraThread() override {
++    if (thread_->handle == this) {
++      thread_->handle = nullptr;
++    }
++  }
++  void* native_handle() const override {
++    return const_cast<VWaitable*>(static_cast<const VWaitable*>(this));
++  }
++  // a thread is waited for until it has ended
++  bool Signaled(const VThread*) const override { return thread_->dead; }
++  void Acquire(VThread*) override {}
++
++  uint32_t system_id() const override { return thread_->id; }
++  void set_name(std::string name) override {
++    thread_->name = name;
++    Thread::set_name(std::move(name));
++  }
++  int32_t priority() override { return thread_->priority; }
++  void set_priority(int32_t new_priority) override {
++    thread_->priority = new_priority;
++  }
++  uint64_t affinity_mask() override { return thread_->affinity; }
++  void set_affinity_mask(uint64_t new_affinity_mask) override {
++    thread_->affinity = new_affinity_mask;
++  }
++  void QueueUserCallback(std::function<void()> callback) override {
++    thread_->callbacks.push_back(std::move(callback));
++  }
++  bool Resume(uint32_t* out_previous_suspend_count) override {
++    if (out_previous_suspend_count) {
++      *out_previous_suspend_count = thread_->suspend_count;
++    }
++    if (thread_->suspend_count) {
++      thread_->suspend_count--;
++    }
++    return true;
++  }
++  bool Suspend(uint32_t* out_previous_suspend_count) override {
++    if (out_previous_suspend_count) {
++      *out_previous_suspend_count = thread_->suspend_count;
++    }
++    thread_->suspend_count++;
++    if (thread_ == Self()) {
++      // suspended by itself: it stops here, until somebody resumes it
++      SwitchTo(thread_, PickNext(thread_));
++    }
++    return true;
++  }
++  void Terminate(int exit_code) override {
++    if (thread_ == Self()) {
++      Thread::Exit(exit_code);
++    }
++    // Its host thread is asleep waiting for the baton and is never given it
++    // again.
++    auto& s = S();
++    thread_->dead = true;
++    s.threads.erase(std::remove(s.threads.begin(), s.threads.end(), thread_),
++                    s.threads.end());
++  }
++
++  VThread* thread() const { return thread_; }
++
++ private:
++  VThread* thread_;
++};
++
++VThread* Adopt(const char* name) {
++  auto& s = S();
++  VThread* t = new VThread();
++  t->id = s.next_id++;
++  t->logical_id = t->id;
++  t->name = name;
++  t->host = pthread_self();
++  t->go = true;
++  s.threads.push_back(t);
++  s.current = t;
++  new ChimeraThread(t);  // kept: the first thread's handle
++  return t;
++}
++
++}  // namespace
++
++// ---------------------------------------------------------------------------
++// The timer queue (threading_timer_queue.h), on this file's time. One thread
++// sleeps until the earliest item is due and runs it.
++
++class TimerQueue {
++ public:
++  static TimerQueue& Get() {
++    static TimerQueue* queue = new TimerQueue();
++    return *queue;
++  }
++
++  std::weak_ptr<TimerQueueWaitItem> Queue(
++      std::function<void(void*)> callback, void* userdata,
++      TimerQueueWaitItem::clock::time_point due,
++      TimerQueueWaitItem::clock::duration interval) {
++    auto item = std::make_shared<TimerQueueWaitItem>(std::move(callback),
++                                                     userdata, this, due,
++                                                     interval);
++    items_.push_back(item);
++    Start();
++    changed_->Set();
++    return item;
++  }
++
++  void Disarm(TimerQueueWaitItem* item) {
++    using State = TimerQueueWaitItem::State;
++    if (item->state_.load() == State::kInCallback) {
++      if (running_on_ == Self()) {
++        // from inside its own callback: it is not queued again
++        item->state_.store(State::kInCallbackSelfDisarmed);
++        return;
++      }
++      // somebody else's callback is part way through: wait for it
++      while (item->state_.load() == State::kInCallback) {
++        YieldNow(Self());
++      }
++    }
++    item->state_.store(State::kDisarmed);
++    for (auto it = items_.begin(); it != items_.end(); ++it) {
++      if (it->get() == item) {
++        items_.erase(it);
++        break;
++      }
++    }
++    changed_->Set();
++  }
++
++ private:
++  TimerQueue() { changed_ = Event::CreateAutoResetEvent(false); }
++
++  void Start() {
++    if (thread_) {
++      return;
++    }
++    Thread::CreationParameters params;
++    thread_ = Thread::Create(params, [this] { Main(); });
++    thread_->set_name("chimera timer queue");
++  }
++
++  void Main() {
++    using State = TimerQueueWaitItem::State;
++    running_on_ = Self();
++    for (;;) {
++      std::shared_ptr<TimerQueueWaitItem> next;
++      for (auto& item : items_) {
++        if (!next || item->due_ < next->due_) {
++          next = item;
++        }
++      }
++      const auto now = chimera::SteadyNow();
++      if (!next || next->due_ > now) {
++        // until the earliest is due, or the queue changes
++        VWaitable* w = static_cast<VWaitable*>(changed_->native_handle());
++        const int64_t deadline =
++            next ? std::chrono::duration_cast<std::chrono::nanoseconds>(
++                       next->due_.time_since_epoch())
++                       .count()
++                 : kNever;
++        Block(Self(), &w, 1, false, false, deadline, nullptr);
++        continue;
++      }
++      next->state_.store(State::kInCallback);
++      next->callback_(next->userdata_);
++      if (next->state_.load() == State::kInCallbackSelfDisarmed ||
++          next->interval_ == TimerQueueWaitItem::clock::duration::zero()) {
++        next->state_.store(State::kDisarmed);
++        items_.erase(std::remove(items_.begin(), items_.end(), next),
++                     items_.end());
++      } else {
++        next->due_ += next->interval_;
++        next->state_.store(State::kIdle);
++      }
++    }
++  }
++
++  std::vector<std::shared_ptr<TimerQueueWaitItem>> items_;
++  std::unique_ptr<Event> changed_;
++  std::unique_ptr<Thread> thread_;
++  VThread* running_on_ = nullptr;
++};
++
++void TimerQueueWaitItem::Disarm() { parent_queue_->Disarm(this); }
++
++std::weak_ptr<TimerQueueWaitItem> QueueTimerOnce(
++    std::function<void(void*)> callback, void* userdata,
++    TimerQueueWaitItem::clock::time_point due) {
++  return TimerQueue::Get().Queue(std::move(callback), userdata, due,
++                                 TimerQueueWaitItem::clock::duration::zero());
++}
++
++std::weak_ptr<TimerQueueWaitItem> QueueTimerRecurring(
++    std::function<void(void*)> callback, void* userdata,
++    TimerQueueWaitItem::clock::time_point due,
++    TimerQueueWaitItem::clock::duration interval) {
++  return TimerQueue::Get().Queue(std::move(callback), userdata, due, interval);
++}
++
++// ---------------------------------------------------------------------------
++// threading.h
++
++void EnableAffinityConfiguration() {}
++
++uint32_t current_thread_system_id() { return Self()->id; }
++void set_name(const std::string_view name) {
++  VThread* self = Self();
++  self->name = std::string(name);
++  if (self->handle) {
++    self->handle->Thread::set_name(std::string(name));
++  }
++}
++
++void MaybeYield() { YieldNow(Self()); }
++void SyncMemory() {}
++
++void NanoSleep(int64_t ns) {
++  VThread* self = Self();
++  if (ns <= 0) {
++    YieldNow(self);
++    return;
++  }
++  Account();
++  Block(self, nullptr, 0, false, false, S().now + ns, nullptr);
++}
++void NanoSleepPrecise(int64_t ns) { NanoSleep(ns); }
++void Sleep(std::chrono::microseconds duration) {
++  NanoSleep(duration.count() * 1000);
++}
++SleepResult AlertableSleep(std::chrono::microseconds duration) {
++  VThread* self = Self();
++  const int64_t ns = std::max<int64_t>(duration.count(), 0) * 1000;
++  Account();
++  const WaitResult r =
++      Block(self, nullptr, 0, false, true, S().now + ns, nullptr);
++  return r == WaitResult::kUserCallback ? SleepResult::kAlerted
++                                        : SleepResult::kSuccess;
++}
++
++TlsHandle AllocateTlsHandle() {
++  auto& s = S();
++  for (uint32_t i = 0; i < 64; i++) {
++    if (!(s.tls_used & (uint64_t(1) << i))) {
++      s.tls_used |= uint64_t(1) << i;
++      for (VThread* t : s.threads) {
++        t->tls[i] = 0;
++      }
++      return i;
++    }
++  }
++  return kInvalidTlsHandle;
++}
++bool FreeTlsHandle(TlsHandle handle) {
++  if (handle >= 64) {
++    return false;
++  }
++  S().tls_used &= ~(uint64_t(1) << handle);
++  return true;
++}
++uintptr_t GetTlsValue(TlsHandle handle) {
++  return handle < 64 ? Self()->tls[handle] : 0;
++}
++bool SetTlsValue(TlsHandle handle, uintptr_t value) {
++  if (handle >= 64) {
++    return false;
++  }
++  Self()->tls[handle] = value;
++  return true;
++}
++
++WaitResult Wait(WaitHandle* wait_handle, bool is_alertable,
++                std::chrono::milliseconds timeout) {
++  VWaitable* w = static_cast<VWaitable*>(wait_handle->native_handle());
++  return Block(Self(), &w, 1, false, is_alertable, DeadlineAfter(timeout),
++               nullptr);
++}
++
++WaitResult SignalAndWait(WaitHandle* wait_handle_to_signal,
++                         WaitHandle* wait_handle_to_wait_on, bool is_alertable,
++                         std::chrono::milliseconds timeout) {
++  // Nothing can come between the two here: the baton is not given up until
++  // the wait.
++  VWaitable* signal =
++      static_cast<VWaitable*>(wait_handle_to_signal->native_handle());
++  if (auto* event = dynamic_cast<ChimeraEvent*>(signal)) {
++    event->Set();
++  } else if (auto* semaphore = dynamic_cast<ChimeraSemaphore*>(signal)) {
++    semaphore->Release(1, nullptr);
++  } else if (auto* mutant = dynamic_cast<ChimeraMutant*>(signal)) {
++    mutant->Release();
++  } else {
++    return WaitResult::kFailed;
++  }
++  return Wait(wait_handle_to_wait_on, is_alertable, timeout);
++}
++
++std::pair<WaitResult, size_t> WaitMultiple(WaitHandle* wait_handles[],
++                                           size_t wait_handle_count,
++                                           bool wait_all, bool is_alertable,
++                                           std::chrono::milliseconds timeout) {
++  std::vector<VWaitable*> waits(wait_handle_count);
++  for (size_t i = 0; i < wait_handle_count; i++) {
++    waits[i] = static_cast<VWaitable*>(wait_handles[i]->native_handle());
++  }
++  size_t index = 0;
++  const WaitResult r = Block(Self(), waits.data(), waits.size(), wait_all,
++                             is_alertable, DeadlineAfter(timeout), &index);
++  return {r, index};
++}
++
++std::unique_ptr<Event> Event::CreateManualResetEvent(bool initial_state) {
++  return std::make_unique<ChimeraEvent>(true, initial_state);
++}
++std::unique_ptr<Event> Event::CreateAutoResetEvent(bool initial_state) {
++  return std::make_unique<ChimeraEvent>(false, initial_state);
++}
++std::unique_ptr<Semaphore> Semaphore::Create(int initial_count,
++                                             int maximum_count) {
++  if (initial_count < 0 || initial_count > maximum_count ||
++      maximum_count <= 0) {
++    return nullptr;
++  }
++  return std::make_unique<ChimeraSemaphore>(initial_count, maximum_count);
++}
++std::unique_ptr<Mutant> Mutant::Create(bool initial_owner) {
++  return std::make_unique<ChimeraMutant>(initial_owner);
++}
++std::unique_ptr<Timer> Timer::CreateManualResetTimer() {
++  return std::make_unique<ChimeraTimer>(true);
++}
++std::unique_ptr<Timer> Timer::CreateSynchronizationTimer() {
++  return std::make_unique<ChimeraTimer>(false);
++}
++
++std::unique_ptr<Thread> Thread::Create(CreationParameters params,
++                                       std::function<void()> start_routine) {
++  auto& s = S();
++  Self();  // whoever creates a thread is in the schedule first
++  VThread* t = new VThread();
++  t->id = s.next_id++;
++  t->logical_id = t->id;
++  t->start = std::move(start_routine);
++  t->suspend_count = params.create_suspended ? 1 : 0;
++  t->priority = params.initial_priority;
++
++  pthread_attr_t attr;
++  pthread_attr_init(&attr);
++  pthread_attr_setstacksize(&attr,
++                            std::max<size_t>(params.stack_size, 1u << 20));
++  pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
++  const int error = pthread_create(&t->host, &attr, HostMain, t);
++  pthread_attr_destroy(&attr);
++  if (error) {
++    delete t;
++    return nullptr;
++  }
++  s.threads.push_back(t);
++  return std::make_unique<ChimeraThread>(t);
++}
++
++Thread* Thread::GetCurrentThread() { return Self()->handle; }
++
++void Thread::Exit(int exit_code) {
++  EndCurrent(Self());
++  pthread_exit(reinterpret_cast<void*>(static_cast<intptr_t>(exit_code)));
++}
++
++}  // namespace threading
++
++// ---------------------------------------------------------------------------
++// chimera_vsched.h
++
++namespace chimera {
++
++int64_t g_instruction_budget = threading::kSliceInstructions;
++
++uint64_t BudgetSpent(void*) {
++  threading::YieldNow(threading::Self());
++  return 0;
++}
++
++int64_t VirtualNanoseconds() {
++  threading::Account();
++  return threading::S().now;
++}
++
++void Charge(int64_t ns) {
++  if (ns > 0) {
++    threading::S().now += ns;
++  }
++}
++
++void Yield() { threading::YieldNow(threading::Self()); }
++
++void SleepUntil(int64_t ns) {
++  threading::Block(threading::Self(), nullptr, 0, false, false, ns, nullptr);
++}
++
++uint64_t Switches() { return threading::S().switches; }
++
++bool WaitFor(const std::function<bool()>& ready, int64_t deadline_ns) {
++  if (ready()) {
++    return true;
++  }
++  struct Predicate final : threading::VWaitable {
++    explicit Predicate(const std::function<bool()>& f) : ready(f) {}
++    bool Signaled(const threading::VThread*) const override { return ready(); }
++    void Acquire(threading::VThread*) override {}
++    const std::function<bool()>& ready;
++  } predicate(ready);
++  threading::VWaitable* w = &predicate;
++  return threading::Block(threading::Self(), &w, 1, false, false, deadline_ns,
++                          nullptr) == threading::WaitResult::kSuccess;
++}
++
++const void* CurrentThread() { return threading::Self(); }
++
++std::chrono::steady_clock::time_point SteadyNow() {
++  return std::chrono::steady_clock::time_point(
++      std::chrono::duration_cast<std::chrono::steady_clock::duration>(
++          std::chrono::nanoseconds(VirtualNanoseconds())));
++}
++
++}  // namespace chimera
++}  // namespace xe
+diff --git a/src/xenia/base/type_pool.h b/src/xenia/base/type_pool.h
+index 81f0ba77f..49609a959 100644
+--- a/src/xenia/base/type_pool.h
++++ b/src/xenia/base/type_pool.h
+@@ -10,6 +10,7 @@
+ #ifndef XENIA_BASE_TYPE_POOL_H_
+ #define XENIA_BASE_TYPE_POOL_H_
+ 
++#include "xenia/base/chimera_sync.h"
+ #include <mutex>
+ #include <vector>
+ 
+@@ -21,7 +22,7 @@ class TypePool {
+   ~TypePool() { Reset(); }
+ 
+   void Reset() {
+-    std::lock_guard<std::mutex> guard(lock_);
++    std::lock_guard<xe::sync::mutex> guard(lock_);
+     for (auto it = list_.begin(); it != list_.end(); ++it) {
+       T* value = *it;
+       delete value;
+@@ -32,7 +33,7 @@ class TypePool {
+   T* Allocate(A arg0) {
+     T* result = 0;
+     {
+-      std::lock_guard<std::mutex> guard(lock_);
++      std::lock_guard<xe::sync::mutex> guard(lock_);
+       if (list_.size()) {
+         result = list_.back();
+         list_.pop_back();
+@@ -45,12 +46,12 @@ class TypePool {
+   }
+ 
+   void Release(T* value) {
+-    std::lock_guard<std::mutex> guard(lock_);
++    std::lock_guard<xe::sync::mutex> guard(lock_);
+     list_.push_back(value);
+   }
+ 
+  private:
+-  std::mutex lock_;
++  xe::sync::mutex lock_;
+   std::vector<T*> list_;
+ };
+ 
+diff --git a/src/xenia/cpu/backend/x64/x64_emitter.cc b/src/xenia/cpu/backend/x64/x64_emitter.cc
+index 694c92b4e..eed8f7234 100644
+--- a/src/xenia/cpu/backend/x64/x64_emitter.cc
++++ b/src/xenia/cpu/backend/x64/x64_emitter.cc
+@@ -7,6 +7,7 @@
+  ******************************************************************************
+  */
+ 
++#include "xenia/base/chimera_vsched.h"
+ #include "xenia/cpu/backend/x64/x64_emitter.h"
+ 
+ #include <stddef.h>
+@@ -286,6 +287,28 @@ bool X64Emitter::Emit(HIRBuilder* builder, EmitFunctionInfo& func_info) {
+     if (cvars::align_all_basic_blocks) {
+       align(cvars::align_all_basic_blocks, true);
+     }
++#ifdef CHIMERA_VSCHED
++    // chimera: a block pays for its guest instructions out of the running
++    // thread's slice, and when the slice is spent the next thread gets a
++    // turn. Nothing lives in a register or in the flags across the start of
++    // a block, so rax and the flags are free here.
++    {
++      uint32_t guest_instructions = 0;
++      for (const Instr* i = block->instr_head; i; i = i->next) {
++        if (i->GetOpcodeNum() == hir::OPCODE_SOURCE_OFFSET) {
++          guest_instructions++;
++        }
++      }
++      if (guest_instructions) {
++        Xbyak::Label still_running;
++        mov(rax, reinterpret_cast<uint64_t>(&xe::chimera::g_instruction_budget));
++        sub(qword[rax], guest_instructions);
++        jns(still_running);
++        CallNativeSafe(reinterpret_cast<void*>(&xe::chimera::BudgetSpent));
++        L(still_running);
++      }
++    }
++#endif
+     // Process instructions.
+     const Instr* instr = block->instr_head;
+     while (instr) {
+diff --git a/src/xenia/gpu/command_processor.h b/src/xenia/gpu/command_processor.h
+index dfe42737f..cc60f55ea 100644
+--- a/src/xenia/gpu/command_processor.h
++++ b/src/xenia/gpu/command_processor.h
+@@ -20,6 +20,7 @@
+ #include <unordered_map>
+ #include <vector>
+ 
++#include "xenia/base/chimera_sync.h"
+ #include "xenia/base/math.h"
+ #include "xenia/base/ring_buffer.h"
+ #include "xenia/gpu/register_file.h"
+@@ -84,7 +85,7 @@ class Shader;
+ 
+ struct SwapState {
+   // Lock must be held when changing data in this structure.
+-  std::mutex mutex;
++  xe::sync::mutex mutex;
+   // Dimensions of the framebuffer textures. Should match window size.
+   uint32_t width = 0;
+   uint32_t height = 0;
+diff --git a/src/xenia/gpu/graphics_system.cc b/src/xenia/gpu/graphics_system.cc
+index f4f4a157d..ca0560fed 100644
+--- a/src/xenia/gpu/graphics_system.cc
++++ b/src/xenia/gpu/graphics_system.cc
+@@ -7,6 +7,7 @@
+  ******************************************************************************
+  */
+ 
++#include "xenia/base/chimera_vsched.h"
+ #include "xenia/gpu/graphics_system.h"
+ 
+ #include "xenia/base/byte_stream.h"
+@@ -208,7 +209,7 @@ X_STATUS GraphicsSystem::Setup(cpu::Processor* processor,
+                     1, static_cast<int64_t>(
+                            static_cast<double>(sleep_duration_ns) /
+                            Clock::guest_time_scalar())));
+-                auto now = std::chrono::steady_clock::now();
++                auto now = XE_STEADY_NOW();
+                 // A pause is not missed beats: start again from now after
+                 // one.
+                 if (vblank_deadline_reset_.exchange(false) ||
+diff --git a/src/xenia/gpu/shader_storage.h b/src/xenia/gpu/shader_storage.h
+index 70c2c91d6..a12cc447e 100644
+--- a/src/xenia/gpu/shader_storage.h
++++ b/src/xenia/gpu/shader_storage.h
+@@ -22,6 +22,7 @@
+ #include <vector>
+ 
+ #include "third_party/fmt/include/fmt/format.h"
++#include "xenia/base/chimera_sync.h"
+ #include "xenia/base/assert.h"
+ #include "xenia/base/byte_order.h"
+ #include "xenia/base/filesystem.h"
+@@ -377,7 +378,7 @@ class ShaderStorageWriter {
+   void ShutdownShaderStorage() {
+     if (storage_write_thread_) {
+       {
+-        std::lock_guard<std::mutex> lock(storage_write_request_lock_);
++        std::lock_guard<xe::sync::mutex> lock(storage_write_request_lock_);
+         storage_write_thread_shutdown_ = true;
+       }
+       storage_write_request_cond_.notify_one();
+@@ -386,7 +387,7 @@ class ShaderStorageWriter {
+     }
+ 
+     {
+-      std::lock_guard<std::mutex> lock(storage_write_request_lock_);
++      std::lock_guard<xe::sync::mutex> lock(storage_write_request_lock_);
+       storage_write_shader_queue_.clear();
+       storage_write_pipeline_queue_.clear();
+       storage_write_flush_shaders_ = false;
+@@ -418,7 +419,7 @@ class ShaderStorageWriter {
+       return;
+     }
+     {
+-      std::lock_guard<std::mutex> lock(storage_write_request_lock_);
++      std::lock_guard<xe::sync::mutex> lock(storage_write_request_lock_);
+       storage_write_shader_queue_.push_back(shader);
+     }
+     storage_write_request_cond_.notify_one();
+@@ -429,7 +430,7 @@ class ShaderStorageWriter {
+       return;
+     }
+     {
+-      std::lock_guard<std::mutex> lock(storage_write_request_lock_);
++      std::lock_guard<xe::sync::mutex> lock(storage_write_request_lock_);
+       storage_write_pipeline_queue_.push_back(description);
+     }
+     storage_write_request_cond_.notify_one();
+@@ -438,7 +439,7 @@ class ShaderStorageWriter {
+   void RequestFlush(bool flush_shaders, bool flush_pipelines) {
+     bool need_notify = false;
+     {
+-      std::lock_guard<std::mutex> lock(storage_write_request_lock_);
++      std::lock_guard<xe::sync::mutex> lock(storage_write_request_lock_);
+       if (flush_shaders) {
+         storage_write_flush_shaders_ = true;
+         need_notify = true;
+@@ -480,7 +481,7 @@ class ShaderStorageWriter {
+       TPipelineStoredDescription pipeline_description;
+       bool write_pipeline = false;
+       {
+-        std::unique_lock<std::mutex> lock(storage_write_request_lock_);
++        std::unique_lock<xe::sync::mutex> lock(storage_write_request_lock_);
+         if (storage_write_thread_shutdown_) {
+           return;
+         }
+@@ -547,8 +548,8 @@ class ShaderStorageWriter {
+   FILE* pipeline_storage_file_ = nullptr;
+ 
+   std::unique_ptr<xe::threading::Thread> storage_write_thread_;
+-  std::mutex storage_write_request_lock_;
+-  std::condition_variable storage_write_request_cond_;
++  xe::sync::mutex storage_write_request_lock_;
++  xe::sync::condition_variable storage_write_request_cond_;
+   std::deque<const Shader*> storage_write_shader_queue_;
+   std::deque<TPipelineStoredDescription> storage_write_pipeline_queue_;
+   bool storage_write_flush_shaders_ = false;
+diff --git a/src/xenia/gpu/vulkan/vulkan_pipeline_cache.cc b/src/xenia/gpu/vulkan/vulkan_pipeline_cache.cc
+index 9a74bbd26..946fb4c3f 100644
+--- a/src/xenia/gpu/vulkan/vulkan_pipeline_cache.cc
++++ b/src/xenia/gpu/vulkan/vulkan_pipeline_cache.cc
+@@ -7,6 +7,7 @@
+  ******************************************************************************
+  */
+ 
++#include "xenia/base/chimera_sync.h"
+ #include "xenia/gpu/vulkan/vulkan_pipeline_cache.h"
+ 
+ #include <cstdint>
+@@ -314,7 +315,7 @@ void VulkanPipelineCache::Shutdown() {
+   // creating them.
+   if (!creation_threads_.empty()) {
+     {
+-      std::lock_guard<std::mutex> lock(creation_request_lock_);
++      std::lock_guard<xe::sync::mutex> lock(creation_request_lock_);
+       creation_threads_shutdown_ = true;
+     }
+     creation_request_cond_.notify_all();
+@@ -326,7 +327,7 @@ void VulkanPipelineCache::Shutdown() {
+   // Clear any pending completion callback (may capture 'this') and reset
+   // startup state.
+   {
+-    std::lock_guard<std::mutex> lock(creation_request_lock_);
++    std::lock_guard<xe::sync::mutex> lock(creation_request_lock_);
+     creation_completion_callback_ = nullptr;
+   }
+   startup_loading_ = false;
+@@ -340,7 +341,7 @@ void VulkanPipelineCache::Shutdown() {
+   // Process any remaining deferred destructions (force destroy all since
+   // device should be idle at shutdown).
+   {
+-    std::lock_guard<std::mutex> lock(deferred_destroy_mutex_);
++    std::lock_guard<xe::sync::mutex> lock(deferred_destroy_mutex_);
+     for (VkShaderModule module : deferred_destroy_shader_modules_) {
+       if (module != VK_NULL_HANDLE) {
+         dfn.vkDestroyShaderModule(device, module, nullptr);
+@@ -809,7 +810,7 @@ bool VulkanPipelineCache::ConfigurePipeline(
+       }
+ 
+       {
+-        std::lock_guard<std::mutex> lock(creation_request_lock_);
++        std::lock_guard<xe::sync::mutex> lock(creation_request_lock_);
+         PipelineCreationArguments creation_arguments;
+         creation_arguments.pipeline = &pipeline_pair;
+         creation_arguments.vertex_shader = vertex_shader;
+@@ -876,7 +877,7 @@ void VulkanPipelineCache::EndSubmission() {
+     // Blocking: wait for all queued pipelines.
+     bool await_creation_completion_event;
+     {
+-      std::lock_guard<std::mutex> lock(creation_request_lock_);
++      std::lock_guard<xe::sync::mutex> lock(creation_request_lock_);
+       await_creation_completion_event =
+           !creation_queue_.empty() || creation_threads_busy_ != 0;
+       if (await_creation_completion_event) {
+@@ -898,7 +899,7 @@ bool VulkanPipelineCache::IsCreatingPipelines() {
+   if (creation_threads_.empty()) {
+     return false;
+   }
+-  std::lock_guard<std::mutex> lock(creation_request_lock_);
++  std::lock_guard<xe::sync::mutex> lock(creation_request_lock_);
+   return !creation_queue_.empty() || creation_threads_busy_ != 0;
+ }
+ 
+@@ -909,7 +910,7 @@ void VulkanPipelineCache::AwaitPipelineCompletion() {
+ 
+   bool await_creation_completion_event;
+   {
+-    std::lock_guard<std::mutex> lock(creation_request_lock_);
++    std::lock_guard<xe::sync::mutex> lock(creation_request_lock_);
+     await_creation_completion_event =
+         !creation_queue_.empty() || creation_threads_busy_ != 0;
+     if (await_creation_completion_event) {
+@@ -928,7 +929,7 @@ void VulkanPipelineCache::CreationThread() {
+   for (;;) {
+     PipelineCreationArguments creation_arguments;
+     {
+-      std::unique_lock<std::mutex> lock(creation_request_lock_);
++      std::unique_lock<xe::sync::mutex> lock(creation_request_lock_);
+       creation_request_cond_.wait(lock, [this]() {
+         return !creation_queue_.empty() || creation_threads_shutdown_;
+       });
+@@ -958,7 +959,7 @@ void VulkanPipelineCache::CreationThread() {
+     }
+ 
+     {
+-      std::unique_lock<std::mutex> lock(creation_request_lock_);
++      std::unique_lock<xe::sync::mutex> lock(creation_request_lock_);
+       --creation_threads_busy_;
+       if (creation_threads_busy_ == 0 && creation_queue_.empty()) {
+         // All pipelines created.
+@@ -1015,7 +1016,7 @@ bool VulkanPipelineCache::TranslateAnalyzedShader(
+           XXH3_64bits(texture_bindings.data(), texture_binding_layout_bytes);
+       // The layout vector and map are shared by every thread translating
+       // shaders for the storage at startup.
+-      std::lock_guard<std::mutex> layouts_lock(layouts_mutex_);
++      std::lock_guard<xe::sync::mutex> layouts_lock(layouts_mutex_);
+       auto found_range =
+           texture_binding_layout_map_.equal_range(texture_binding_layout_hash);
+       for (auto it = found_range.first; it != found_range.second; ++it) {
+@@ -3263,7 +3264,7 @@ bool VulkanPipelineCache::EnsurePipelineCreated(
+     // current submission number so we only destroy after the GPU is done.
+     uint64_t current_submission = command_processor_.GetCurrentSubmission();
+     {
+-      std::lock_guard<std::mutex> lock(deferred_destroy_mutex_);
++      std::lock_guard<xe::sync::mutex> lock(deferred_destroy_mutex_);
+       deferred_destroy_pipelines_.emplace_back(old_pipeline,
+                                                current_submission);
+     }
+@@ -3285,7 +3286,7 @@ void VulkanPipelineCache::ProcessDeferredDestructions() {
+   uint64_t completed_submission = command_processor_.GetCompletedSubmission();
+ 
+   {
+-    std::lock_guard<std::mutex> lock(deferred_destroy_mutex_);
++    std::lock_guard<xe::sync::mutex> lock(deferred_destroy_mutex_);
+     if (deferred_destroy_shader_modules_.empty() &&
+         deferred_destroy_pipelines_.empty()) {
+       return;
+@@ -3607,7 +3608,7 @@ void VulkanPipelineCache::InitializeShaderStorage(
+               pixel_shader->writes_depth());
+         }
+ 
+-        std::lock_guard<std::mutex> lock(creation_request_lock_);
++        std::lock_guard<xe::sync::mutex> lock(creation_request_lock_);
+         PipelineCreationArguments creation_arguments;
+         creation_arguments.pipeline = &pipeline_pair;
+         creation_arguments.vertex_shader = vertex_translation;
+@@ -3644,7 +3645,7 @@ void VulkanPipelineCache::InitializeShaderStorage(
+         // Blocking mode: wait for all pipelines to be created.
+         bool await_creation_completion_event;
+         {
+-          std::lock_guard<std::mutex> lock(creation_request_lock_);
++          std::lock_guard<xe::sync::mutex> lock(creation_request_lock_);
+           await_creation_completion_event =
+               !creation_queue_.empty() || creation_threads_busy_ != 0;
+           if (await_creation_completion_event) {
+@@ -3659,7 +3660,7 @@ void VulkanPipelineCache::InitializeShaderStorage(
+         }
+       } else {
+         // Non-blocking mode: store callback for later invocation.
+-        std::lock_guard<std::mutex> lock(creation_request_lock_);
++        std::lock_guard<xe::sync::mutex> lock(creation_request_lock_);
+         if (creation_queue_.empty() && creation_threads_busy_ == 0) {
+           // No work pending - callback will be invoked at end of function.
+         } else {
+diff --git a/src/xenia/gpu/vulkan/vulkan_pipeline_cache.h b/src/xenia/gpu/vulkan/vulkan_pipeline_cache.h
+index 15044536f..e748dfa46 100644
+--- a/src/xenia/gpu/vulkan/vulkan_pipeline_cache.h
++++ b/src/xenia/gpu/vulkan/vulkan_pipeline_cache.h
+@@ -26,6 +26,7 @@
+ #include <utility>
+ #include <vector>
+ 
++#include "xenia/base/chimera_sync.h"
+ #include "xenia/base/hash.h"
+ #include "xenia/base/platform.h"
+ #include "xenia/base/threading.h"
+@@ -426,7 +427,7 @@ class VulkanPipelineCache {
+     size_t vector_span_offset;
+     size_t vector_span_length;
+   };
+-  std::mutex layouts_mutex_;
++  xe::sync::mutex layouts_mutex_;
+   // Texture binding layouts of different shaders, for obtaining layout UIDs.
+   std::vector<VulkanShader::TextureBinding> texture_binding_layouts_;
+   // Map of texture binding layouts used by shaders, for obtaining UIDs. Keys
+@@ -511,8 +512,8 @@ class VulkanPipelineCache {
+                       std::vector<PipelineCreationArguments>,
+                       PipelineCreationPriorityCompare>
+       creation_queue_;
+-  std::mutex creation_request_lock_;
+-  std::condition_variable creation_request_cond_;
++  xe::sync::mutex creation_request_lock_;
++  xe::sync::condition_variable creation_request_cond_;
+   std::unique_ptr<xe::threading::Event> creation_completion_event_ = nullptr;
+   std::atomic<bool> creation_completion_set_event_{false};
+   std::function<void()> creation_completion_callback_;
+@@ -528,7 +529,7 @@ class VulkanPipelineCache {
+   // Pipelines pending destruction, paired with the submission number they were
+   // last potentially used in. Only destroyed when that submission completes.
+   std::vector<std::pair<VkPipeline, uint64_t>> deferred_destroy_pipelines_;
+-  std::mutex deferred_destroy_mutex_;
++  xe::sync::mutex deferred_destroy_mutex_;
+ 
+   // Shader and pipeline storage.
+   uint32_t shader_storage_title_id_ = 0;
+diff --git a/src/xenia/kernel/kernel_state.h b/src/xenia/kernel/kernel_state.h
+index 6752e5675..b12e3e6ba 100644
+--- a/src/xenia/kernel/kernel_state.h
++++ b/src/xenia/kernel/kernel_state.h
+@@ -16,6 +16,7 @@
+ #include <list>
+ #include <vector>
+ 
++#include "xenia/base/chimera_sync.h"
+ #include "xenia/base/bit_map.h"
+ #include "xenia/cpu/backend/backend.h"
+ #include "xenia/cpu/export_resolver.h"
+@@ -379,7 +380,7 @@ class KernelState {
+   object_ref<XHostThread> dispatch_thread_;
+   // Must be guarded by the global critical region.
+   util::NativeList dpc_list_;
+-  std::condition_variable_any dispatch_cond_;
++  xe::sync::condition_variable_any dispatch_cond_;
+   std::list<std::function<void()>> dispatch_queue_;
+ 
+   uint32_t ke_timestamp_bundle_ptr_ = 0;
+diff --git a/src/xenia/kernel/xam/user_profile.h b/src/xenia/kernel/xam/user_profile.h
+index 1fa41047e..52cd5f06b 100644
+--- a/src/xenia/kernel/xam/user_profile.h
++++ b/src/xenia/kernel/xam/user_profile.h
+@@ -17,6 +17,7 @@
+ #include <unordered_map>
+ #include <vector>
+ 
++#include "xenia/base/chimera_sync.h"
+ #include "xenia/kernel/xam/user_property.h"
+ #include "xenia/kernel/xam/xam.h"
+ #include "xenia/kernel/xam/xdbf/gpd_info_profile.h"
+@@ -168,7 +169,7 @@ class UserProfile {
+   GpdInfoProfile dashboard_gpd_;
+   std::map<uint32_t, GpdInfoTitle> games_gpd_;
+   std::vector<Property> properties_;  // Includes contexts!
+-  std::mutex prop_mutex;              // 5841089C
++  xe::sync::mutex prop_mutex;              // 5841089C
+ 
+   std::map<XTileType, std::vector<uint8_t>> profile_images_;
+ 
+diff --git a/src/xenia/kernel/xevent.cc b/src/xenia/kernel/xevent.cc
+index 736a5b8a9..30f8e1eeb 100644
+--- a/src/xenia/kernel/xevent.cc
++++ b/src/xenia/kernel/xevent.cc
+@@ -7,6 +7,7 @@
+  ******************************************************************************
+  */
+ 
++#include "xenia/base/chimera_sync.h"
+ #include "xenia/kernel/xevent.h"
+ 
+ #include "xenia/base/byte_stream.h"
+@@ -71,7 +72,7 @@ void XEvent::InitializeNative(void* native_ptr,
+ int32_t XEvent::Set(uint32_t priority_increment, bool wait) {
+   set_priority_increment(priority_increment);
+   {
+-    std::lock_guard<std::mutex> lock(state_lock_);
++    std::lock_guard<xe::sync::mutex> lock(state_lock_);
+     memory()->TranslateVirtual<X_KEVENT*>(guest_object())->header.signal_state =
+         1;
+     host_signaled_ = true;
+@@ -84,7 +85,7 @@ int32_t XEvent::Pulse(uint32_t priority_increment, bool wait) {
+   set_priority_increment(priority_increment);
+   auto* kevent = memory()->TranslateVirtual<X_KEVENT*>(guest_object());
+   // KePulseEvent returns the pre-pulse signal state.
+-  std::lock_guard<std::mutex> lock(state_lock_);
++  std::lock_guard<xe::sync::mutex> lock(state_lock_);
+   const int32_t old_signal_state = kevent->header.signal_state;
+   event_->Pulse();
+   // Pulse leaves the event reset after releasing waiters.
+@@ -94,7 +95,7 @@ int32_t XEvent::Pulse(uint32_t priority_increment, bool wait) {
+ }
+ 
+ int32_t XEvent::Reset() {
+-  std::lock_guard<std::mutex> lock(state_lock_);
++  std::lock_guard<xe::sync::mutex> lock(state_lock_);
+   memory()->TranslateVirtual<X_KEVENT*>(guest_object())->header.signal_state =
+       0;
+   host_signaled_ = false;
+@@ -105,7 +106,7 @@ int32_t XEvent::Reset() {
+ void XEvent::WaitCallback() {
+   // Auto-reset events atomically clear on successful wait; manual stay set.
+   if (!manual_reset_) {
+-    std::lock_guard<std::mutex> lock(state_lock_);
++    std::lock_guard<xe::sync::mutex> lock(state_lock_);
+     memory()->TranslateVirtual<X_KEVENT*>(guest_object())->header.signal_state =
+         0;
+     host_signaled_ = false;
+@@ -118,7 +119,7 @@ void XEvent::SyncFromGuest() {
+   }
+ 
+   {
+-    std::lock_guard<std::mutex> lock(state_lock_);
++    std::lock_guard<xe::sync::mutex> lock(state_lock_);
+     auto* kevent = memory()->TranslateVirtual<X_KEVENT*>(guest_object());
+     bool guest_signaled = kevent->header.signal_state ? true : false;
+     if (guest_signaled == host_signaled_) {
+diff --git a/src/xenia/kernel/xevent.h b/src/xenia/kernel/xevent.h
+index f300ca506..4cd37c4d9 100644
+--- a/src/xenia/kernel/xevent.h
++++ b/src/xenia/kernel/xevent.h
+@@ -12,6 +12,7 @@
+ 
+ #include <mutex>
+ 
++#include "xenia/base/chimera_sync.h"
+ #include "xenia/base/threading.h"
+ #include "xenia/kernel/xobject.h"
+ #include "xenia/xbox.h"
+@@ -54,7 +55,7 @@ class XEvent : public XObject {
+   bool manual_reset_ = false;
+   std::unique_ptr<xe::threading::Event> event_;
+ 
+-  std::mutex state_lock_;
++  xe::sync::mutex state_lock_;
+   bool host_signaled_ = false;
+ };
+ 
+diff --git a/src/xenia/kernel/xfile.cc b/src/xenia/kernel/xfile.cc
+index 442750cfe..cdf8b759e 100644
+--- a/src/xenia/kernel/xfile.cc
++++ b/src/xenia/kernel/xfile.cc
+@@ -7,6 +7,7 @@
+  ******************************************************************************
+  */
+ 
++#include "xenia/base/chimera_sync.h"
+ #include "xenia/kernel/xfile.h"
+ #include "xenia/vfs/virtual_file_system.h"
+ 
+@@ -36,19 +37,19 @@ XFile::~XFile() {
+ }
+ 
+ uint64_t XFile::position() const {
+-  std::lock_guard<std::mutex> lock(file_lock_);
++  std::lock_guard<xe::sync::mutex> lock(file_lock_);
+   return position_;
+ }
+ 
+ void XFile::set_position(uint64_t value) {
+-  std::lock_guard<std::mutex> lock(file_lock_);
++  std::lock_guard<xe::sync::mutex> lock(file_lock_);
+   position_ = value;
+ }
+ 
+ X_STATUS XFile::QueryDirectory(X_FILE_DIRECTORY_INFORMATION* out_info,
+                                size_t length, const std::string_view file_name,
+                                bool restart) {
+-  std::lock_guard<std::mutex> lock(file_lock_);
++  std::lock_guard<xe::sync::mutex> lock(file_lock_);
+   assert_not_null(out_info);
+ 
+   vfs::Entry* entry = nullptr;
+@@ -102,7 +103,7 @@ X_STATUS XFile::QueryDirectory(X_FILE_DIRECTORY_INFORMATION* out_info,
+ X_STATUS XFile::Read(uint32_t buffer_guest_address, uint32_t buffer_length,
+                      uint64_t byte_offset, uint32_t* out_bytes_read,
+                      uint32_t apc_context, bool notify_completion) {
+-  std::lock_guard<std::mutex> lock(file_lock_);
++  std::lock_guard<xe::sync::mutex> lock(file_lock_);
+   return ReadInternal(buffer_guest_address, buffer_length, byte_offset,
+                       out_bytes_read, apc_context, notify_completion);
+ }
+@@ -204,7 +205,7 @@ X_STATUS XFile::ReadInternal(uint32_t buffer_guest_address,
+ X_STATUS XFile::ReadScatter(uint32_t segments_guest_address, uint32_t length,
+                             uint64_t byte_offset, uint32_t* out_bytes_read,
+                             uint32_t apc_context) {
+-  std::lock_guard<std::mutex> lock(file_lock_);
++  std::lock_guard<xe::sync::mutex> lock(file_lock_);
+   X_STATUS result = X_STATUS_SUCCESS;
+ 
+   // segments points to an array of buffer pointers of type
+@@ -262,7 +263,7 @@ X_STATUS XFile::ReadScatter(uint32_t segments_guest_address, uint32_t length,
+ X_STATUS XFile::Write(uint32_t buffer_guest_address, uint32_t buffer_length,
+                       uint64_t byte_offset, uint32_t* out_bytes_written,
+                       uint32_t apc_context) {
+-  std::lock_guard<std::mutex> lock(file_lock_);
++  std::lock_guard<xe::sync::mutex> lock(file_lock_);
+   if (byte_offset == uint64_t(-1)) {
+     // Write from current position.
+     byte_offset = position_;
+@@ -293,7 +294,7 @@ X_STATUS XFile::Write(uint32_t buffer_guest_address, uint32_t buffer_length,
+ }
+ 
+ X_STATUS XFile::SetLength(size_t length) {
+-  std::lock_guard<std::mutex> lock(file_lock_);
++  std::lock_guard<xe::sync::mutex> lock(file_lock_);
+   return file_->SetLength(length);
+ }
+ X_STATUS XFile::Rename(const std::filesystem::path file_path) {
+@@ -303,13 +304,13 @@ X_STATUS XFile::Rename(const std::filesystem::path file_path) {
+ 
+ void XFile::RegisterIOCompletionPort(uint32_t key,
+                                      object_ref<XIOCompletion> port) {
+-  std::lock_guard<std::mutex> lock(completion_port_lock_);
++  std::lock_guard<xe::sync::mutex> lock(completion_port_lock_);
+ 
+   completion_ports_.push_back({key, port});
+ }
+ 
+ void XFile::RemoveIOCompletionPort(uint32_t key) {
+-  std::lock_guard<std::mutex> lock(completion_port_lock_);
++  std::lock_guard<xe::sync::mutex> lock(completion_port_lock_);
+ 
+   for (auto it = completion_ports_.begin(); it != completion_ports_.end();
+        it++) {
+@@ -374,7 +375,7 @@ object_ref<XFile> XFile::Restore(KernelState* kernel_state,
+ 
+ void XFile::NotifyIOCompletionPorts(
+     XIOCompletion::IONotification& notification) {
+-  std::lock_guard<std::mutex> lock(completion_port_lock_);
++  std::lock_guard<xe::sync::mutex> lock(completion_port_lock_);
+ 
+   for (auto port : completion_ports_) {
+     notification.key_context = port.first;
+diff --git a/src/xenia/kernel/xfile.h b/src/xenia/kernel/xfile.h
+index 566315503..0d04a6931 100644
+--- a/src/xenia/kernel/xfile.h
++++ b/src/xenia/kernel/xfile.h
+@@ -13,6 +13,7 @@
+ #include <mutex>
+ #include <string>
+ 
++#include "xenia/base/chimera_sync.h"
+ #include "xenia/kernel/xiocompletion.h"
+ #include "xenia/vfs/device.h"
+ #include "xenia/vfs/entry.h"
+@@ -193,8 +194,8 @@ class XFile : public XObject {
+   vfs::File* file_ = nullptr;
+   std::unique_ptr<threading::Event> async_event_ = nullptr;
+ 
+-  mutable std::mutex file_lock_;
+-  std::mutex completion_port_lock_;
++  mutable xe::sync::mutex file_lock_;
++  xe::sync::mutex completion_port_lock_;
+   std::vector<std::pair<uint32_t, object_ref<XIOCompletion>>> completion_ports_;
+ 
+   // TODO(benvanik): create flags, open state, etc.
+diff --git a/src/xenia/kernel/xiocompletion.cc b/src/xenia/kernel/xiocompletion.cc
+index 9f0411bfe..21d6cc973 100644
+--- a/src/xenia/kernel/xiocompletion.cc
++++ b/src/xenia/kernel/xiocompletion.cc
+@@ -7,6 +7,7 @@
+  ******************************************************************************
+  */
+ 
++#include "xenia/base/chimera_sync.h"
+ #include "xenia/kernel/xiocompletion.h"
+ 
+ namespace xe {
+@@ -21,7 +22,7 @@ XIOCompletion::XIOCompletion(KernelState* kernel_state)
+ XIOCompletion::~XIOCompletion() = default;
+ 
+ void XIOCompletion::QueueNotification(IONotification& notification) {
+-  std::unique_lock<std::mutex> lock(notification_lock_);
++  std::unique_lock<xe::sync::mutex> lock(notification_lock_);
+ 
+   notifications_.push(notification);
+   notification_semaphore_->Release(1, nullptr);
+@@ -32,7 +33,7 @@ bool XIOCompletion::WaitForNotification(uint64_t wait_ticks,
+   auto ms = std::chrono::milliseconds(TimeoutTicksToMs(wait_ticks));
+   auto res = threading::Wait(notification_semaphore_.get(), false, ms);
+   if (res == threading::WaitResult::kSuccess) {
+-    std::unique_lock<std::mutex> lock(notification_lock_);
++    std::unique_lock<xe::sync::mutex> lock(notification_lock_);
+     assert_false(notifications_.empty());
+ 
+     std::memcpy(notify, &notifications_.front(), sizeof(IONotification));
+diff --git a/src/xenia/kernel/xiocompletion.h b/src/xenia/kernel/xiocompletion.h
+index 8a5a5ec7c..e9ad7a4cc 100644
+--- a/src/xenia/kernel/xiocompletion.h
++++ b/src/xenia/kernel/xiocompletion.h
+@@ -12,6 +12,7 @@
+ 
+ #include <queue>
+ 
++#include "xenia/base/chimera_sync.h"
+ #include "xenia/base/threading.h"
+ #include "xenia/kernel/xobject.h"
+ #include "xenia/xbox.h"
+@@ -41,7 +42,7 @@ class XIOCompletion : public XObject {
+  private:
+   static constexpr uint32_t kMaxNotifications = 1024;
+ 
+-  std::mutex notification_lock_;
++  xe::sync::mutex notification_lock_;
+   std::queue<IONotification> notifications_;
+   std::unique_ptr<threading::Semaphore> notification_semaphore_ = nullptr;
+ };
+diff --git a/src/xenia/kernel/xsemaphore.cc b/src/xenia/kernel/xsemaphore.cc
+index 4e0812bc3..cb276679c 100644
+--- a/src/xenia/kernel/xsemaphore.cc
++++ b/src/xenia/kernel/xsemaphore.cc
+@@ -7,6 +7,7 @@
+  ******************************************************************************
+  */
+ 
++#include "xenia/base/chimera_sync.h"
+ #include "xenia/kernel/xsemaphore.h"
+ 
+ #include "xenia/base/byte_stream.h"
+@@ -53,7 +54,7 @@ bool XSemaphore::ReleaseSemaphore(int32_t release_count,
+ 
+   bool success = false;
+   {
+-    std::lock_guard<std::mutex> lock(count_lock_);
++    std::lock_guard<xe::sync::mutex> lock(count_lock_);
+     success = semaphore_->Release(release_count, &previous_count);
+     if (success) {
+       host_count_ += release_count;
+@@ -95,7 +96,7 @@ bool XSemaphore::Save(ByteStream* stream) {
+ }
+ 
+ void XSemaphore::WaitCallback() {
+-  std::lock_guard<std::mutex> lock(count_lock_);
++  std::lock_guard<xe::sync::mutex> lock(count_lock_);
+   host_count_ -= 1;
+   memory()
+       ->TranslateVirtual<X_KSEMAPHORE*>(guest_object())
+@@ -108,7 +109,7 @@ void XSemaphore::SyncFromGuest() {
+   }
+ 
+   {
+-    std::lock_guard<std::mutex> lock(count_lock_);
++    std::lock_guard<xe::sync::mutex> lock(count_lock_);
+     auto& signal_state = memory()
+                              ->TranslateVirtual<X_KSEMAPHORE*>(guest_object())
+                              ->header.signal_state;
+diff --git a/src/xenia/kernel/xsemaphore.h b/src/xenia/kernel/xsemaphore.h
+index a8300f477..ca5e5efb1 100644
+--- a/src/xenia/kernel/xsemaphore.h
++++ b/src/xenia/kernel/xsemaphore.h
+@@ -12,6 +12,7 @@
+ 
+ #include <mutex>
+ 
++#include "xenia/base/chimera_sync.h"
+ #include "xenia/base/threading.h"
+ #include "xenia/kernel/xobject.h"
+ #include "xenia/kernel/xthread.h"
+@@ -49,7 +50,7 @@ class XSemaphore : public XObject {
+   std::unique_ptr<xe::threading::Semaphore> semaphore_;
+   uint32_t maximum_count_ = 0;
+ 
+-  std::mutex count_lock_;
++  xe::sync::mutex count_lock_;
+ 
+   int32_t host_count_ = 0;
+ };
+diff --git a/src/xenia/kernel/xsocket.cc b/src/xenia/kernel/xsocket.cc
+index 8dbb6ce53..db272f086 100644
+--- a/src/xenia/kernel/xsocket.cc
++++ b/src/xenia/kernel/xsocket.cc
+@@ -11,6 +11,7 @@
+ 
+ #include <cstring>
+ 
++#include "xenia/base/chimera_sync.h"
+ #include "xenia/base/logging.h"
+ #include "xenia/base/platform.h"
+ #include "xenia/kernel/kernel_state.h"
+@@ -263,7 +264,7 @@ int XSocket::RecvFrom(uint8_t* buf, uint32_t buf_len, uint32_t flags,
+   // TODO(DrChat): Enable when I commit XNet
+   /*
+   {
+-    std::lock_guard<std::mutex> lock(incoming_packet_mutex_);
++    std::lock_guard<xe::sync::mutex> lock(incoming_packet_mutex_);
+     if (incoming_packets_.size()) {
+       packet* pkt = (packet*)incoming_packets_.front();
+       int data_len = pkt->data_len;
+@@ -338,7 +339,7 @@ bool XSocket::QueuePacket(uint32_t src_ip, uint16_t src_port,
+   pkt->data_len = (uint16_t)len;
+   std::memcpy(pkt->data, buf, len);
+ 
+-  std::lock_guard<std::mutex> lock(incoming_packet_mutex_);
++  std::lock_guard<xe::sync::mutex> lock(incoming_packet_mutex_);
+   incoming_packets_.push((uint8_t*)pkt);
+ 
+   // TODO: Limit on number of incoming packets?
+diff --git a/src/xenia/kernel/xsocket.h b/src/xenia/kernel/xsocket.h
+index 13a146f0f..9d16f1c17 100644
+--- a/src/xenia/kernel/xsocket.h
++++ b/src/xenia/kernel/xsocket.h
+@@ -13,6 +13,7 @@
+ #include <cstring>
+ #include <queue>
+ 
++#include "xenia/base/chimera_sync.h"
+ #include "xenia/base/byte_order.h"
+ #include "xenia/kernel/xobject.h"
+ 
+@@ -159,7 +160,7 @@ class XSocket : public XObject {
+   bool broadcast_socket_ = false;
+ 
+   std::unique_ptr<xe::threading::Event> event_;
+-  std::mutex incoming_packet_mutex_;
++  xe::sync::mutex incoming_packet_mutex_;
+   std::queue<uint8_t*> incoming_packets_;
+ };
+ 
+diff --git a/src/xenia/kernel/xthread.cc b/src/xenia/kernel/xthread.cc
+index 71643901d..884335db9 100644
+--- a/src/xenia/kernel/xthread.cc
++++ b/src/xenia/kernel/xthread.cc
+@@ -7,6 +7,7 @@
+  ******************************************************************************
+  */
+ 
++#include "xenia/base/chimera_sync.h"
+ #include "xenia/kernel/xthread.h"
+ 
+ #if !XE_PLATFORM_WIN32
+@@ -143,7 +144,7 @@ void XThread::set_last_error(uint32_t error_code) {
+ }
+ 
+ void XThread::set_name(const std::string_view name) {
+-  std::lock_guard<std::mutex> lock(thread_lock_);
++  std::lock_guard<xe::sync::mutex> lock(thread_lock_);
+   thread_name_ = fmt::format("{} ({:08X})", name, handle());
+ 
+   if (thread_) {
+@@ -908,7 +909,7 @@ X_STATUS XThread::Resume(uint32_t* out_suspend_count) {
+   // Use mutex to protect suspend_count access and coordinate with SelfSuspend.
+   bool should_resume_host = false;
+   {
+-    std::lock_guard<std::mutex> lock(suspend_mutex_);
++    std::lock_guard<xe::sync::mutex> lock(suspend_mutex_);
+     uint8_t previous = guest_thread->suspend_count;
+     if (previous > 0) {
+       guest_thread->suspend_count--;
+@@ -959,7 +960,7 @@ X_STATUS XThread::Suspend(uint32_t* out_suspend_count) {
+ #if !XE_PLATFORM_WIN32
+ uint32_t XThread::SelfSuspend() {
+   auto guest_thread = guest_object<X_KTHREAD>();
+-  std::unique_lock<std::mutex> lock(suspend_mutex_);
++  std::unique_lock<xe::sync::mutex> lock(suspend_mutex_);
+   uint32_t previous = guest_thread->suspend_count;
+   guest_thread->suspend_count++;
+   suspend_cv_.wait(
+diff --git a/src/xenia/kernel/xthread.h b/src/xenia/kernel/xthread.h
+index 2c1e75856..ea7a352fb 100644
+--- a/src/xenia/kernel/xthread.h
++++ b/src/xenia/kernel/xthread.h
+@@ -13,6 +13,7 @@
+ #include <atomic>
+ #include <string>
+ 
++#include "xenia/base/chimera_sync.h"
+ #include "xenia/base/mutex.h"
+ #if !XE_PLATFORM_WIN32
+ #include <condition_variable>
+@@ -539,8 +540,8 @@ class XThread : public XObject, public cpu::Thread {
+ 
+ #if !XE_PLATFORM_WIN32
+   // Condition variable for thread self-suspension.
+-  std::mutex suspend_mutex_;
+-  std::condition_variable suspend_cv_;
++  xe::sync::mutex suspend_mutex_;
++  xe::sync::condition_variable suspend_cv_;
+ #endif
+ 
+   // Reentry mechanism for fiber-based stack switching.
+@@ -552,7 +553,7 @@ class XThread : public XObject, public cpu::Thread {
+   uint32_t reentry_address_ = 0;
+ #endif
+ 
+-  std::mutex thread_lock_;
++  xe::sync::mutex thread_lock_;
+ };
+ 
+ class XHostThread : public XThread {
+diff --git a/src/xenia/kernel/xtimer.cc b/src/xenia/kernel/xtimer.cc
+index 22732f074..d29920bb9 100644
+--- a/src/xenia/kernel/xtimer.cc
++++ b/src/xenia/kernel/xtimer.cc
+@@ -7,6 +7,7 @@
+  ******************************************************************************
+  */
+ 
++#include "xenia/base/chimera_sync.h"
+ #include "xenia/kernel/xtimer.h"
+ 
+ #include "xenia/base/logging.h"
+@@ -41,7 +42,7 @@ X_STATUS XTimer::SetTimer(int64_t due_time, uint32_t period_ms,
+   using xe::chrono::WinSystemClock;
+   using xe::chrono::XSystemClock;
+ 
+-  std::lock_guard<std::mutex> lock(timer_lock_);
++  std::lock_guard<xe::sync::mutex> lock(timer_lock_);
+ 
+   period_ms = Clock::ScaleGuestDurationMillis(period_ms);
+   WinSystemClock::time_point due_tp;
+@@ -97,7 +98,7 @@ X_STATUS XTimer::SetTimer(int64_t due_time, uint32_t period_ms,
+ }
+ 
+ X_STATUS XTimer::Cancel() {
+-  std::lock_guard<std::mutex> lock(timer_lock_);
++  std::lock_guard<xe::sync::mutex> lock(timer_lock_);
+   return timer_->Cancel() ? X_STATUS_SUCCESS : X_STATUS_UNSUCCESSFUL;
+ }
+ 
+diff --git a/src/xenia/kernel/xtimer.h b/src/xenia/kernel/xtimer.h
+index bbdfb391a..983f41143 100644
+--- a/src/xenia/kernel/xtimer.h
++++ b/src/xenia/kernel/xtimer.h
+@@ -12,6 +12,7 @@
+ 
+ #include <mutex>
+ 
++#include "xenia/base/chimera_sync.h"
+ #include "xenia/base/threading.h"
+ #include "xenia/kernel/xobject.h"
+ #include "xenia/xbox.h"
+@@ -39,7 +40,7 @@ class XTimer : public XObject {
+ 
+  private:
+   std::unique_ptr<xe::threading::Timer> timer_;
+-  std::mutex timer_lock_;
++  xe::sync::mutex timer_lock_;
+ 
+   XThread* callback_thread_ = nullptr;
+   uint32_t callback_routine_ = 0;
+diff --git a/src/xenia/ui/presenter.cc b/src/xenia/ui/presenter.cc
+index d53a08120..d361280f1 100644
+--- a/src/xenia/ui/presenter.cc
++++ b/src/xenia/ui/presenter.cc
+@@ -7,6 +7,7 @@
+  ******************************************************************************
+  */
+ 
++#include "xenia/base/chimera_sync.h"
+ #include "xenia/ui/presenter.h"
+ 
+ #include "xenia/base/assert.h"
+@@ -85,7 +86,7 @@ Presenter::~Presenter() {
+ #if XE_PLATFORM_WIN32
+   if (dxgi_ui_tick_thread_.joinable()) {
+     {
+-      std::scoped_lock<std::mutex> dxgi_ui_tick_lock(dxgi_ui_tick_mutex_);
++      std::scoped_lock<xe::sync::mutex> dxgi_ui_tick_lock(dxgi_ui_tick_mutex_);
+       dxgi_ui_tick_thread_shutdown_ = true;
+     }
+     dxgi_ui_tick_control_condition_.notify_all();
+@@ -422,7 +423,7 @@ bool Presenter::RefreshGuestOutput(
+   // Trigger the presentation on the host.
+   PaintResult paint_result = PaintResult::kNotPresented;
+   {
+-    std::lock_guard<std::mutex> paint_mode_mutex_lock(paint_mode_mutex_);
++    std::lock_guard<xe::sync::mutex> paint_mode_mutex_lock(paint_mode_mutex_);
+     switch (paint_mode_) {
+       case PaintMode::kNone:
+         // Neither painting nor window paint requesting is accessible.
+@@ -489,7 +490,7 @@ void Presenter::SetGuestOutputPaintConfigFromUIThread(
+   }
+   if (modified) {
+     {
+-      std::unique_lock<std::mutex> config_lock(
++      std::unique_lock<xe::sync::mutex> config_lock(
+           guest_output_paint_config_mutex_);
+       guest_output_paint_config_ = new_config;
+     }
+@@ -593,14 +594,14 @@ bool Presenter::InitializeCommonSurfaceIndependent() {
+   return true;
+ }
+ 
+-std::unique_lock<std::mutex> Presenter::ConsumeGuestOutput(
++std::unique_lock<xe::sync::mutex> Presenter::ConsumeGuestOutput(
+     uint32_t& mailbox_index_or_max_if_inactive_out,
+     GuestOutputProperties* properties_out,
+     GuestOutputPaintConfig* paint_config_out) {
+   if (paint_config_out) {
+     // Get the up-to-date guest output paint configuration settings set by the
+     // UI thread.
+-    std::unique_lock<std::mutex> config_lock(guest_output_paint_config_mutex_);
++    std::unique_lock<xe::sync::mutex> config_lock(guest_output_paint_config_mutex_);
+     *paint_config_out = guest_output_paint_config_;
+   }
+ 
+@@ -608,7 +609,7 @@ std::unique_lock<std::mutex> Presenter::ConsumeGuestOutput(
+   // exclusively by the calling thread for the time while this mutex is still
+   // locked (it needs to be held by the consumer while working with anything
+   // that depends on the image now being acquired or its index in the mailbox).
+-  std::unique_lock<std::mutex> consumer_lock(
++  std::unique_lock<xe::sync::mutex> consumer_lock(
+       guest_output_mailbox_consumer_mutex_);
+   // Acquire the up-to-date ready guest image (may be new, in this case the last
+   // acquired one will be released, or still the same or no refresh has happened
+@@ -1062,7 +1063,7 @@ void Presenter::SetPaintModeFromUIThread(PaintMode new_mode) {
+     return;
+   }
+   {
+-    std::lock_guard<std::mutex> lock(paint_mode_mutex_);
++    std::lock_guard<xe::sync::mutex> lock(paint_mode_mutex_);
+     paint_mode_ = new_mode;
+   }
+   UpdateUITicksNeededFromUIThread();
+@@ -1225,7 +1226,7 @@ void Presenter::UpdateSurfaceMonitorFromUIThread(
+       {
+         Microsoft::WRL::ComPtr<IDXGIOutput> old_factory_output_to_release;
+         {
+-          std::scoped_lock<std::mutex> dxgi_ui_tick_lock(dxgi_ui_tick_mutex_);
++          std::scoped_lock<xe::sync::mutex> dxgi_ui_tick_lock(dxgi_ui_tick_mutex_);
+           old_factory_output_to_release = std::move(dxgi_ui_tick_output_);
+         }
+       }
+@@ -1247,7 +1248,7 @@ void Presenter::UpdateSurfaceMonitorFromUIThread(
+     // null.
+     bool signal_dxgi_ui_tick_control;
+     {
+-      std::unique_lock<std::mutex> dxgi_ui_tick_lock(dxgi_ui_tick_mutex_);
++      std::unique_lock<xe::sync::mutex> dxgi_ui_tick_lock(dxgi_ui_tick_mutex_);
+       bool dxgi_output_was_null = (dxgi_ui_tick_output_ == nullptr);
+       dxgi_ui_tick_output_ = new_dxgi_output;
+       signal_dxgi_ui_tick_control =
+@@ -1346,7 +1347,7 @@ void Presenter::UpdateUITicksNeededFromUIThread() {
+   }
+   bool signal_dxgi_ui_tick_control;
+   {
+-    std::unique_lock<std::mutex> dxgi_ui_tick_lock(dxgi_ui_tick_mutex_);
++    std::unique_lock<xe::sync::mutex> dxgi_ui_tick_lock(dxgi_ui_tick_mutex_);
+     dxgi_ui_ticks_needed_ = new_needed;
+     signal_dxgi_ui_tick_control = AreDXGIUITicksWaitable(dxgi_ui_tick_lock);
+   }
+@@ -1361,7 +1362,7 @@ void Presenter::WaitForUITickFromUIThread() {
+   if (!AreUITicksNeededFromUIThread()) {
+     return;
+   }
+-  std::unique_lock<std::mutex> dxgi_ui_tick_lock(dxgi_ui_tick_mutex_);
++  std::unique_lock<xe::sync::mutex> dxgi_ui_tick_lock(dxgi_ui_tick_mutex_);
+   uint64_t last_vblank_before_wait = dxgi_ui_tick_last_vblank_;
+   while (true) {
+     // Guest output present requests should interrupt the wait as quickly as
+@@ -1387,7 +1388,7 @@ void Presenter::WaitForUITickFromUIThread() {
+ 
+ void Presenter::ForceUIThreadPaintTick() {
+ #if XE_PLATFORM_WIN32
+-  std::scoped_lock<std::mutex> dxgi_ui_tick_lock(dxgi_ui_tick_mutex_);
++  std::scoped_lock<xe::sync::mutex> dxgi_ui_tick_lock(dxgi_ui_tick_mutex_);
+   dxgi_ui_tick_force_requested_ = true;
+ #endif  // XE_PLATFORM
+ }
+@@ -1414,7 +1415,7 @@ Microsoft::WRL::ComPtr<IDXGIOutput> Presenter::GetDXGIOutputForMonitor(
+ }
+ 
+ void Presenter::DXGIUITickThread() {
+-  std::unique_lock<std::mutex> dxgi_ui_tick_lock(dxgi_ui_tick_mutex_);
++  std::unique_lock<xe::sync::mutex> dxgi_ui_tick_lock(dxgi_ui_tick_mutex_);
+   while (true) {
+     if (dxgi_ui_tick_thread_shutdown_) {
+       return;
+diff --git a/src/xenia/ui/presenter.h b/src/xenia/ui/presenter.h
+index b1d38224e..d474aa2c4 100644
+--- a/src/xenia/ui/presenter.h
++++ b/src/xenia/ui/presenter.h
+@@ -26,6 +26,7 @@
+ #include <utility>
+ #include <vector>
+ 
++#include "xenia/base/chimera_sync.h"
+ #include "xenia/base/assert.h"
+ #include "xenia/base/byte_order.h"
+ #include "xenia/base/cvar.h"
+@@ -635,7 +636,7 @@ class Presenter {
+   // mechanisms that allow for doing so as described earlier. Returns UINT32_MAX
+   // as the mailbox index if the image is inactive (if it's active, it has
+   // proper properties though).
+-  [[nodiscard]] std::unique_lock<std::mutex> ConsumeGuestOutput(
++  [[nodiscard]] std::unique_lock<xe::sync::mutex> ConsumeGuestOutput(
+       uint32_t& mailbox_index_or_max_if_inactive_out,
+       GuestOutputProperties* properties_out,
+       GuestOutputPaintConfig* paint_config_out);
+@@ -873,7 +874,7 @@ class Presenter {
+   //
+   // On the other hand, the guest output thread _must_ hold it all the time it's
+   // painting, to ensure the mode stays the same while it's painting.
+-  std::mutex paint_mode_mutex_;
++  xe::sync::mutex paint_mode_mutex_;
+   // UI thread: writable, guest output thread: read-only.
+   PaintMode paint_mode_ = PaintMode::kNone;
+ 
+@@ -916,7 +917,7 @@ class Presenter {
+   // repaint request anyway.
+   std::atomic<bool> ui_thread_paint_requested_{false};
+ 
+-  std::mutex guest_output_paint_config_mutex_;
++  xe::sync::mutex guest_output_paint_config_mutex_;
+   // UI thread: writable, guest output thread: read-only.
+   GuestOutputPaintConfig guest_output_paint_config_;
+ 
+@@ -953,7 +954,7 @@ class Presenter {
+   // the reverse when painting in the guest output thread - painting is done
+   // with paint_mode_mutex_ held in this case, and guest output consumption
+   // happens as part of painting.
+-  std::mutex guest_output_mailbox_consumer_mutex_;
++  xe::sync::mutex guest_output_mailbox_consumer_mutex_;
+ 
+   std::array<GuestOutputProperties, kGuestOutputMailboxSize>
+       guest_output_properties_;
+@@ -990,7 +991,7 @@ class Presenter {
+   static Microsoft::WRL::ComPtr<IDXGIOutput> GetDXGIOutputForMonitor(
+       IDXGIFactory1* factory, HMONITOR monitor);
+   bool AreDXGIUITicksWaitable(
+-      [[maybe_unused]] const std::unique_lock<std::mutex>& dxgi_ui_tick_lock) {
++      [[maybe_unused]] const std::unique_lock<xe::sync::mutex>& dxgi_ui_tick_lock) {
+     return dxgi_ui_ticks_needed_ && !dxgi_ui_tick_thread_shutdown_ &&
+            dxgi_ui_tick_output_;
+   }
+@@ -1013,7 +1014,7 @@ class Presenter {
+   // tick-mutex-protected variable.
+   uint64_t dxgi_ui_tick_last_draw_ = 0;
+ 
+-  std::mutex dxgi_ui_tick_mutex_;
++  xe::sync::mutex dxgi_ui_tick_mutex_;
+   uint64_t dxgi_ui_tick_last_vblank_ = 1;
+   // If output is null or shutdown is true, the signal may not be sent, either
+   // don't limit the frame rate in this case (an exceptional situation, such as
+@@ -1030,9 +1031,9 @@ class Presenter {
+   bool dxgi_ui_tick_thread_shutdown_ = false;
+   bool dxgi_ui_tick_force_requested_ = false;
+ 
+-  std::condition_variable dxgi_ui_tick_control_condition_;
++  xe::sync::condition_variable dxgi_ui_tick_control_condition_;
+   // May be signaled by guest output refreshing.
+-  std::condition_variable dxgi_ui_tick_signal_condition_;
++  xe::sync::condition_variable dxgi_ui_tick_signal_condition_;
+ 
+   std::thread dxgi_ui_tick_thread_;
+ #endif  // XE_PLATFORM
+diff --git a/src/xenia/ui/vulkan/vulkan_device.h b/src/xenia/ui/vulkan/vulkan_device.h
+index 5b0b0778c..a3183fc98 100644
+--- a/src/xenia/ui/vulkan/vulkan_device.h
++++ b/src/xenia/ui/vulkan/vulkan_device.h
+@@ -15,6 +15,7 @@
+ #include <mutex>
+ #include <vector>
+ 
++#include "xenia/base/chimera_sync.h"
+ #include "xenia/ui/vulkan/vulkan_instance.h"
+ 
+ namespace xe {
+@@ -255,7 +256,7 @@ class VulkanDevice {
+ 
+   struct Queue {
+     // Host access to queues must be externally synchronized in Vulkan.
+-    std::recursive_mutex mutex;
++    xe::sync::recursive_mutex mutex;
+     VkQueue queue = nullptr;
+ 
+     explicit Queue(const VkQueue queue) : queue(queue) {}
+@@ -268,7 +269,7 @@ class VulkanDevice {
+       VkQueue queue() const { return queue_; }
+ 
+      private:
+-      std::unique_lock<std::recursive_mutex> lock_;
++      std::unique_lock<xe::sync::recursive_mutex> lock_;
+       VkQueue queue_;
+     };
+ 
+diff --git a/src/xenia/ui/vulkan/vulkan_presenter.cc b/src/xenia/ui/vulkan/vulkan_presenter.cc
+index 68b97e788..e67b9f508 100644
+--- a/src/xenia/ui/vulkan/vulkan_presenter.cc
++++ b/src/xenia/ui/vulkan/vulkan_presenter.cc
+@@ -7,6 +7,7 @@
+  ******************************************************************************
+  */
+ 
++#include "xenia/base/chimera_sync.h"
+ #include "xenia/ui/vulkan/vulkan_presenter.h"
+ 
+ #include <cstdint>
+@@ -233,7 +234,7 @@ bool VulkanPresenter::CaptureGuestOutput(RawImage& image_out) {
+   std::shared_ptr<GuestOutputImage> guest_output_image;
+   {
+     uint32_t guest_output_mailbox_index;
+-    std::unique_lock<std::mutex> guest_output_consumer_lock(
++    std::unique_lock<xe::sync::mutex> guest_output_consumer_lock(
+         ConsumeGuestOutput(guest_output_mailbox_index, nullptr, nullptr));
+     if (guest_output_mailbox_index != UINT32_MAX) {
+       assert_true(guest_output_images_[guest_output_mailbox_index]
+@@ -1516,7 +1517,7 @@ Presenter::PaintResult VulkanPresenter::PaintAndPresentImpl(
+   std::shared_ptr<GuestOutputImage> guest_output_image;
+   {
+     uint32_t guest_output_mailbox_index;
+-    std::unique_lock<std::mutex> guest_output_consumer_lock(
++    std::unique_lock<xe::sync::mutex> guest_output_consumer_lock(
+         ConsumeGuestOutput(guest_output_mailbox_index, &guest_output_properties,
+                            &guest_output_paint_config));
+     if (guest_output_mailbox_index != UINT32_MAX) {
+diff --git a/src/xenia/ui/windowed_app_context.cc b/src/xenia/ui/windowed_app_context.cc
+index 93971ce9a..e83099a47 100644
+--- a/src/xenia/ui/windowed_app_context.cc
++++ b/src/xenia/ui/windowed_app_context.cc
+@@ -7,6 +7,7 @@
+  ******************************************************************************
+  */
+ 
++#include "xenia/base/chimera_sync.h"
+ #include "xenia/ui/windowed_app_context.h"
+ 
+ #include "xenia/base/assert.h"
+@@ -46,7 +47,7 @@ WindowedAppContext::~WindowedAppContext() {
+ bool WindowedAppContext::CallInUIThreadDeferred(
+     std::function<void()> function) {
+   {
+-    std::unique_lock<std::mutex> pending_functions_lock(
++    std::unique_lock<xe::sync::mutex> pending_functions_lock(
+         pending_functions_mutex_);
+     if (!pending_functions_accepted_) {
+       // Will not be called as the loop will not be executed anymore.
+@@ -137,7 +138,7 @@ void WindowedAppContext::QuitFromUIThread() {
+ 
+ void WindowedAppContext::ExecutePendingFunctionsFromUIThread(bool is_final) {
+   assert_true(IsInUIThread());
+-  std::unique_lock<std::mutex> pending_functions_lock(pending_functions_mutex_);
++  std::unique_lock<xe::sync::mutex> pending_functions_lock(pending_functions_mutex_);
+   while (!pending_functions_.empty()) {
+     // Removing the function from the queue before executing it, as the function
+     // itself may call ExecutePendingFunctionsFromUIThread - if it's kept, the
+@@ -151,8 +152,8 @@ void WindowedAppContext::ExecutePendingFunctionsFromUIThread(bool is_final) {
+     // long time to execute if it opens some dialog (possibly with its own
+     // platform message loop), and in that case, without unlocking, no other
+     // thread would be able to add new pending functions (which would result in
+-    // unintended waits for user input). This also allows using std::mutex
+-    // instead of std::recursive_mutex.
++    // unintended waits for user input). This also allows using xe::sync::mutex
++    // instead of xe::sync::recursive_mutex.
+     pending_functions_lock.unlock();
+     function();
+     pending_functions_lock.lock();
+diff --git a/src/xenia/ui/windowed_app_context.h b/src/xenia/ui/windowed_app_context.h
+index eb377cc20..edde7025a 100644
+--- a/src/xenia/ui/windowed_app_context.h
++++ b/src/xenia/ui/windowed_app_context.h
+@@ -16,6 +16,7 @@
+ #include <mutex>
+ #include <thread>
+ 
++#include "xenia/base/chimera_sync.h"
+ #include "xenia/base/assert.h"
+ 
+ namespace xe {
+@@ -168,7 +169,7 @@ class WindowedAppContext {
+   // functions will be executed anymore, therefore no new function should be
+   // queued, as it will never be called (thus CallInUIThreadSynchronous for it
+   // will never return, for instance).
+-  std::mutex pending_functions_mutex_;
++  xe::sync::mutex pending_functions_mutex_;
+   std::deque<std::function<void()>> pending_functions_;
+   // Protected by pending_functions_mutex_, writable by the UI thread, readable
+   // by any thread. Must be set to false before exiting the main platform loop,

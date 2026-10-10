@@ -23,8 +23,7 @@ done
 
 xenia="$root/extern/xenia"
 tools="$root/build/tools"
-native="$root/build/native"
-mkdir -p "$tools/bin" "$native"
+mkdir -p "$tools/bin"
 
 # The shader tools. Canary's Vulkan shaders are compiled at build time by
 # glslangValidator and optimised by spirv-opt, from a Vulkan SDK or the PATH.
@@ -49,34 +48,50 @@ if [ ! -x "$tools/bin/spirv-opt" ] || [ ! -x "$tools/bin/spirv-dis" ]; then
 	cp "$tools/spirv-tools/tools/spirv-opt" "$tools/spirv-tools/tools/spirv-dis" "$tools/bin/"
 fi
 
+# Two trees of the same sources:
+#
+#   build/native   the host's threads on the host's clock, as upstream runs.
+#                  Upstream's instruction tests are run on this one.
+#   build/vsched   one thread at a time on the emulator's own clock (patch
+#                  0003, CHIMERA_VSCHED): the reference that repeats, and
+#                  what the sandboxed build will be compared with.
+#
 # XENIA_BUILD_TESTS brings upstream's instruction-test runner
 # (xenia-cpu-ppc-tests), which waterbox/run-ppc-tests.sh runs;
 # CHIMERA_DRIVER_DIR brings the core's own driver, waterbox/native/run-native.
-CC="${CC:-clang-20}" CXX="${CXX:-clang++-20}" cmake -S "$xenia" -B "$native" -G Ninja \
-	-DCMAKE_BUILD_TYPE=Release -DCHIMERA_HEADLESS=ON -DXENIA_BUILD_TESTS=ON \
-	-DCHIMERA_DRIVER_DIR="$here/native" > "$root/build/configure-native.log" 2>&1
-
-# What xenia-build.py writes before a build: which commit this is. The date is
-# a word and not a date, so that two builds of one commit are one binary.
 commit="$(git -C "$xenia" rev-parse HEAD)"
 short="$(printf %s "$commit" | cut -c1-9)"
-{
-	echo "// Written by waterbox/build-native.sh, in place of xenia-build.py."
-	echo "#ifndef GENERATED_VERSION_H_"
-	echo "#define GENERATED_VERSION_H_"
-	echo "#define XE_BUILD_BRANCH \"canary_experimental\""
-	echo "#define XE_BUILD_COMMIT \"$commit\""
-	echo "#define XE_BUILD_COMMIT_SHORT \"$short\""
-	echo "#define XE_BUILD_DATE \"chimera\""
-	echo "#endif"
-} > "$native/version.h.new"
-cmp -s "$native/version.h.new" "$native/version.h" 2>/dev/null || mv "$native/version.h.new" "$native/version.h"
-rm -f "$native/version.h.new"
+for tree in native vsched; do
+	dir="$root/build/$tree"
+	mkdir -p "$dir"
+	flags="-DCHIMERA_HEADLESS=ON -DXENIA_BUILD_TESTS=ON"
+	[ "$tree" = vsched ] && flags="-DCHIMERA_HEADLESS=ON -DCHIMERA_VSCHED=ON"
+	# shellcheck disable=SC2086
+	CC="${CC:-clang-20}" CXX="${CXX:-clang++-20}" cmake -S "$xenia" -B "$dir" -G Ninja \
+		-DCMAKE_BUILD_TYPE=Release $flags -DCHIMERA_DRIVER_DIR="$here/native" \
+		> "$root/build/configure-$tree.log" 2>&1
 
-# shellcheck disable=SC2086
-VULKAN_SDK="$tools" ninja -C "$native" $jobs > "$root/build/build-native.log" 2>&1 || {
-	grep -E "^FAILED|error:" "$root/build/build-native.log" | head -20 >&2
-	echo "the native build failed: build/build-native.log" >&2
-	exit 1
-}
-echo "built: $(ls "$native"/obj/Linux/*.a | wc -l) libraries, and build/native/bin/Linux/run-native"
+	# What xenia-build.py writes before a build: which commit this is. The
+	# date is a word and not a date, so that two builds of one commit are one
+	# binary.
+	{
+		echo "// Written by waterbox/build-native.sh, in place of xenia-build.py."
+		echo "#ifndef GENERATED_VERSION_H_"
+		echo "#define GENERATED_VERSION_H_"
+		echo "#define XE_BUILD_BRANCH \"canary_experimental\""
+		echo "#define XE_BUILD_COMMIT \"$commit\""
+		echo "#define XE_BUILD_COMMIT_SHORT \"$short\""
+		echo "#define XE_BUILD_DATE \"chimera\""
+		echo "#endif"
+	} > "$dir/version.h.new"
+	cmp -s "$dir/version.h.new" "$dir/version.h" 2>/dev/null || mv "$dir/version.h.new" "$dir/version.h"
+	rm -f "$dir/version.h.new"
+
+	# shellcheck disable=SC2086
+	VULKAN_SDK="$tools" ninja -C "$dir" $jobs > "$root/build/build-$tree.log" 2>&1 || {
+		grep -E "^FAILED|error:" "$root/build/build-$tree.log" | head -20 >&2
+		echo "the $tree build failed: build/build-$tree.log" >&2
+		exit 1
+	}
+	echo "built: build/$tree/bin/Linux/run-native"
+done
