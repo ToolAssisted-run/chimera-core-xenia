@@ -1732,18 +1732,19 @@ index 81f0ba77f..49609a959 100644
  };
  
 diff --git a/src/xenia/cpu/backend/x64/x64_emitter.cc b/src/xenia/cpu/backend/x64/x64_emitter.cc
-index 694c92b4e..eed8f7234 100644
+index 694c92b4e..cc0332749 100644
 --- a/src/xenia/cpu/backend/x64/x64_emitter.cc
 +++ b/src/xenia/cpu/backend/x64/x64_emitter.cc
-@@ -7,6 +7,7 @@
+@@ -7,6 +7,8 @@
   ******************************************************************************
   */
  
++#include "xenia/base/chimera_flatmem.h"
 +#include "xenia/base/chimera_vsched.h"
  #include "xenia/cpu/backend/x64/x64_emitter.h"
  
  #include <stddef.h>
-@@ -286,6 +287,28 @@ bool X64Emitter::Emit(HIRBuilder* builder, EmitFunctionInfo& func_info) {
+@@ -286,6 +288,28 @@ bool X64Emitter::Emit(HIRBuilder* builder, EmitFunctionInfo& func_info) {
      if (cvars::align_all_basic_blocks) {
        align(cvars::align_all_basic_blocks, true);
      }
@@ -1772,6 +1773,169 @@ index 694c92b4e..eed8f7234 100644
      // Process instructions.
      const Instr* instr = block->instr_head;
      while (instr) {
+@@ -711,7 +735,14 @@ void X64Emitter::Call(const hir::Instr* instr, GuestFunction* function) {
+     // The target dword will either contain the address of the generated code
+     // or a thunk to ResolveAddress.
+     mov(ebx, function->address());
++#ifdef CHIMERA_FLATMEM
++    // chimera: the table is reached from the memory base, and what a slot
++    // holds is how far from that base the code is
++    mov(eax, dword[GetMembaseReg() + rbx + xe::chimera::kIndirectionDisp]);
++    add(rax, GetMembaseReg());
++#else
+     mov(eax, dword[ebx]);
++#endif
+   } else {
+     // Old-style resolve.
+     // Not too important because indirection table is almost always available.
+@@ -752,10 +783,23 @@ void X64Emitter::CallIndirect(const hir::Instr* instr,
+   // The target dword will either contain the address of the generated code
+   // or a thunk to ResolveAddress.
+   if (code_cache_->has_indirection_table()) {
++#ifdef CHIMERA_FLATMEM
++    // chimera: always - the slot is addressed with all 64 bits of rbx, and
++    // the upper half of a register that holds a guest address is anything
++    mov(ebx, reg.cvt32());
++#else
+     if (reg.cvt32() != ebx) {
+       mov(ebx, reg.cvt32());
+     }
++#endif
++#ifdef CHIMERA_FLATMEM
++    // chimera: the table is reached from the memory base, and what a slot
++    // holds is how far from that base the code is
++    mov(eax, dword[GetMembaseReg() + rbx + xe::chimera::kIndirectionDisp]);
++    add(rax, GetMembaseReg());
++#else
+     mov(eax, dword[ebx]);
++#endif
+   } else {
+     // Old-style resolve.
+     // Not too important because indirection table is almost always available.
+@@ -1243,6 +1287,18 @@ static constexpr uintptr_t kConstDataIncrement = 0x00001000;
+ // doing so requires RIP-relative addressing, which is difficult to support
+ // given the current setup.
+ uintptr_t X64Emitter::PlaceConstData() {
++#ifdef CHIMERA_FLATMEM
++  // chimera: just below the console's memory, where generated code reaches
++  // it from the memory base (ConstAt)
++  static_assert(kConstDataSize <= xe::chimera::kConstDataRoom);
++  if (uint8_t* const base = xe::chimera::FlatBase()) {
++    uint8_t* const at = base - xe::chimera::kConstDataBelow;
++    std::memcpy(at, xmm_consts, sizeof(xmm_consts));
++    return reinterpret_cast<uintptr_t>(at);
++  }
++  assert_always();
++  return 0;
++#endif
+   uint8_t* ptr = reinterpret_cast<uint8_t*>(kConstDataLocation);
+   void* mem = nullptr;
+   while (!mem) {
+@@ -1273,6 +1329,9 @@ uintptr_t X64Emitter::PlaceConstData() {
+ }
+ 
+ void X64Emitter::FreeConstData(uintptr_t data) {
++#ifdef CHIMERA_FLATMEM
++  return;  // chimera: the memory block's, not ours
++#endif
+   memory::DeallocFixed(reinterpret_cast<void*>(data),
+                        xe::round_up(kConstDataSize, memory::page_size()),
+                        memory::DeallocationType::kRelease);
+@@ -1283,10 +1342,30 @@ Xbyak::Address X64Emitter::GetXmmConstPtr(XmmConst id) {
+   // It's important that the pointer is not signed, as it will be sign-extended.
+   void* emitter_data_ptr =
+       backend_->LookupXMMConstantAddress(static_cast<unsigned>(id));
++#ifdef CHIMERA_FLATMEM
++  return ptr[ConstAt(emitter_data_ptr)];
++#else
+   xenia_assert(reinterpret_cast<uintptr_t>(emitter_data_ptr) <
+                (1ULL << 31));  // must not have signbit set
+   return ptr[emitter_data_ptr];
++#endif
++}
++
++#ifdef CHIMERA_FLATMEM
++// chimera: a place in the recompiler's constants, as generated code reaches
++// it - so far from the register that holds the console's memory base.
++Xbyak::RegExp X64Emitter::ConstAt(const void* address) const {
++  const int64_t distance =
++      reinterpret_cast<intptr_t>(address) -
++      reinterpret_cast<intptr_t>(xe::chimera::FlatBase());
++  xenia_assert(distance >= INT32_MIN && distance <= INT32_MAX);
++  // xbyak takes a distance as an unsigned number and a direction
++  if (distance < 0) {
++    return GetMembaseReg() - static_cast<size_t>(-distance);
++  }
++  return GetMembaseReg() + static_cast<size_t>(distance);
+ }
++#endif
+ // Implies possible StashXmm(0, ...)!
+ void X64Emitter::LoadConstantXmm(Xbyak::Xmm dest, const vec128_t& v) {
+   // https://www.agner.org/optimize/optimizing_assembly.pdf
+@@ -1325,7 +1404,11 @@ void X64Emitter::LoadConstantXmm(Xbyak::Xmm dest, const vec128_t& v) {
+         void* bval = FindByteConstantOffset(firstbyte);
+ 
+         if (bval) {
++#ifdef CHIMERA_FLATMEM
++          vpbroadcastb(dest, byte[ConstAt(bval)]);
++#else
+           vpbroadcastb(dest, byte[bval]);
++#endif
+           return;
+         }
+         // didnt find existing mem with the value
+@@ -1345,7 +1428,11 @@ void X64Emitter::LoadConstantXmm(Xbyak::Xmm dest, const vec128_t& v) {
+       if (all_equal_words) {
+         void* wval = FindWordConstantOffset(firstword);
+         if (wval) {
++#ifdef CHIMERA_FLATMEM
++          vpbroadcastw(dest, word[ConstAt(wval)]);
++#else
+           vpbroadcastw(dest, word[wval]);
++#endif
+           return;
+         }
+         // didnt find existing mem with the value
+@@ -1365,7 +1452,11 @@ void X64Emitter::LoadConstantXmm(Xbyak::Xmm dest, const vec128_t& v) {
+       if (all_equal_dwords) {
+         void* dwval = FindDwordConstantOffset(firstdword);
+         if (dwval) {
++#ifdef CHIMERA_FLATMEM
++          vpbroadcastd(dest, dword[ConstAt(dwval)]);
++#else
+           vpbroadcastd(dest, dword[dwval]);
++#endif
+           return;
+         }
+         mov(dword[rsp + kStashOffset], firstdword);
+@@ -1378,7 +1469,11 @@ void X64Emitter::LoadConstantXmm(Xbyak::Xmm dest, const vec128_t& v) {
+       if (all_equal_qwords) {
+         void* qwval = FindQwordConstantOffset(v.low);
+         if (qwval) {
++#ifdef CHIMERA_FLATMEM
++          vpbroadcastq(dest, qword[ConstAt(qwval)]);
++#else
+           vpbroadcastq(dest, qword[qwval]);
++#endif
+           return;
+         }
+         MovMem64(rsp + kStashOffset, v.low);
+@@ -1389,9 +1484,15 @@ void X64Emitter::LoadConstantXmm(Xbyak::Xmm dest, const vec128_t& v) {
+ 
+     for (auto& vec : xmm_consts) {
+       if (vec.low == v.low && vec.high == v.high) {
++#ifdef CHIMERA_FLATMEM
++        vmovdqa(dest,
++                ptr[ConstAt(reinterpret_cast<void*>(
++                    backend_->emitter_data() + ((&vec - &xmm_consts[0]) * 16)))]);
++#else
+         vmovdqa(dest,
+                 ptr[reinterpret_cast<void*>(backend_->emitter_data() +
+                                             ((&vec - &xmm_consts[0]) * 16))]);
++#endif
+         return;
+       }
+     }
 diff --git a/src/xenia/cpu/backend/x64/x64_sequences.cc b/src/xenia/cpu/backend/x64/x64_sequences.cc
 index 29c885add..1444a5d3d 100644
 --- a/src/xenia/cpu/backend/x64/x64_sequences.cc

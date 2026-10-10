@@ -326,6 +326,50 @@ physical view. With one block the emulator's own access meets its own
 protection. The null renderer sets no such watch, so nothing has met it
 yet; the Vulkan renderer will.
 
+## M2: the recompiler from the memory base (2026-10-10)
+
+Upstream's x64 backend is built on 32-bit absolute host addresses: its table
+of function addresses is AT host address 0x80000000 (so that the slot for a
+guest function is at the function's own guest address, read with a 32-bit
+load), its code at 0xA0000000, its constants at 0x20000000, its trampolines
+somewhere below 2 GiB, and every "host address" it stores is 32 bits. A
+guest has nothing below 4 GiB.
+
+Patch 0007 (part of `CHIMERA_FLATMEM`) puts all four at fixed places
+relative to the console's memory block, and generated code reaches them from
+the register that always holds the block's address:
+
+- the constants just below the block (`[membase - 0x8000 + n]`);
+- the trampolines and the code in the block's top GiB, which the fold leaves
+  untouched (0xC0100000 and 0xC1000000);
+- the table from the block's last 64 KiB onwards, 512 MiB past its end, so
+  that the slot for guest address g is `[membase + g + 0x7FFF0000]`.
+
+And the block begins on a multiple of 4 GiB (4 GiB more are reserved to
+find one), which is what makes this small: the low 32 bits of any address in
+the block are its distance from the base, and that is exactly what the
+backend already keeps wherever it keeps a 32-bit host address. A call
+through the table is `mov eax, [membase + rbx + 0x7FFF0000]; add rax,
+membase; call rax`.
+
+Two things found by running it. xbyak takes a displacement as an unsigned
+number and a direction, so a negative one handed over as a sum throws
+"offset is too big" - twice, the second time from two helpers that named
+their constants without going through the function everything else uses.
+And an indirect call's target register may be rbx itself, with anything in
+its upper half: upstream's 32-bit load did not care, the 64-bit one jumped
+into the console's RAM and ran it as code (the run hung with one thread in
+unnamed code and time standing still). It is zero-extended always.
+
+Proved natively: the game's run is the run it was (258,326, 437,
+ed611adef65dbf20) and the instruction tests - a new recompiler for every
+test, in the places the last one left - fail the reference's 28,320.
+
+So the three things known from the source to stand between the recompiler
+and a sandbox are done on the native build, where each could be compared
+with what it replaced: the memory, the registers, the recompiler's own
+addresses. What is left of M2 is the sandbox itself.
+
 ## The recompiler's own tests (2026-10-10)
 
 Upstream has 570 files of PowerPC instruction tests

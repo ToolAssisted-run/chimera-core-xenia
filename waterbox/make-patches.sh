@@ -2,7 +2,9 @@
 # Writes patches/ from the patched extern/xenia tree: the reverse of
 # apply-patches.sh. A patch is the tree's difference in a list of paths; what
 # no list names goes to the patch marked "*". Edit the tree, run this, and
-# apply-patches.sh must then say "already applied".
+# apply-patches.sh must then say "already applied". A file is in ONE patch,
+# whole: where two patches' subjects meet in a file (x64_emitter.cc has the
+# scheduler's budget and the recompiler's move), it is in the earlier one.
 set -eu
 here="$(cd "$(dirname "$0")" && pwd)"
 root="$(cd "$here/.." && pwd)"
@@ -16,6 +18,7 @@ series='
 0004-chimera-what-gcc-will-not-take|src/xenia/base/cvar.h src/xenia/base/memory.cc src/xenia/gpu/command_processor.h
 0005-chimera-the-instruction-tests-in-one-process|src/xenia/cpu/ppc/testing/ppc_testing_main.cc src/xenia/cpu/ppc/testing/CMakeLists.txt
 0006-chimera-the-memory-in-one-block|src/xenia/base/chimera_flatmem.h src/xenia/memory.h src/xenia/memory.cc src/xenia/cpu/ppc/ppc_context.h src/xenia/cpu/backend/x64/x64_seq_memory.cc
+0007-chimera-the-recompiler-from-the-memory-base|src/xenia/cpu/backend/code_cache_base.h src/xenia/cpu/backend/x64/x64_emitter.h src/xenia/cpu/backend/x64/x64_backend.cc
 '
 
 # new files are part of the difference

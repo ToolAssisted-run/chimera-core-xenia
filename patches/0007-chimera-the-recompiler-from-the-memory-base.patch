@@ -1,0 +1,205 @@
+diff --git a/src/xenia/cpu/backend/code_cache_base.h b/src/xenia/cpu/backend/code_cache_base.h
+index 9477cc7a8..705d54a81 100644
+--- a/src/xenia/cpu/backend/code_cache_base.h
++++ b/src/xenia/cpu/backend/code_cache_base.h
+@@ -21,6 +21,7 @@
+ #include <vector>
+ 
+ #include "third_party/fmt/include/fmt/format.h"
++#include "xenia/base/chimera_flatmem.h"
+ #include "xenia/base/assert.h"
+ #include "xenia/base/clock.h"
+ #include "xenia/base/literals.h"
+@@ -84,6 +85,18 @@ template <typename Derived>
+ class CodeCacheBase : public CodeCache {
+  public:
+   ~CodeCacheBase() override {
++#ifdef CHIMERA_FLATMEM
++    // chimera: the table and the code are the memory block's (see
++    // Initialize) and are not this object's to release. What it filled in
++    // is cleared, for whoever is given the same places next.
++    for (const auto& range : committed_ranges_) {
++      std::memset(indirection_table_base_ + (range.first - kIndirectionTableBase),
++                  0, range.second - range.first);
++    }
++    indirection_table_base_ = nullptr;
++    generated_code_execute_base_ = nullptr;
++    generated_code_write_base_ = nullptr;
++#endif
+     if (indirection_table_base_) {
+       xe::memory::DeallocFixed(indirection_table_base_, kIndirectionTableSize,
+                                xe::memory::DeallocationType::kRelease);
+@@ -105,7 +118,11 @@ class CodeCacheBase : public CodeCache {
+ 
+   const std::filesystem::path& file_name() const override { return file_name_; }
+   uintptr_t execute_base_address() const override {
++#ifdef CHIMERA_FLATMEM
++    return reinterpret_cast<uintptr_t>(generated_code_execute_base_);
++#else
+     return kGeneratedCodeExecuteBase;
++#endif
+   }
+   size_t total_size() const override { return kGeneratedCodeSize; }
+ 
+@@ -128,10 +145,14 @@ class CodeCacheBase : public CodeCache {
+     if (!indirection_table_base_) {
+       return;
+     }
++#ifdef CHIMERA_FLATMEM
++    committed_ranges_.emplace_back(guest_low, guest_high);
++#else
+     xe::memory::AllocFixed(
+         indirection_table_base_ + (guest_low - kIndirectionTableBase),
+         guest_high - guest_low, xe::memory::AllocationType::kCommit,
+         xe::memory::PageAccess::kReadWrite);
++#endif
+     uint32_t* p = reinterpret_cast<uint32_t*>(indirection_table_base_);
+     for (uint32_t address = guest_low; address < guest_high; ++address) {
+       p[(address - kIndirectionTableBase) / 4] = indirection_default_value_;
+@@ -286,6 +307,22 @@ class CodeCacheBase : public CodeCache {
+   CodeCacheBase() = default;
+ 
+   bool Initialize() {
++#ifdef CHIMERA_FLATMEM
++    // chimera: at fixed places relative to the console's memory, which is
++    // where generated code reaches them from (base/chimera_flatmem.h). The
++    // memory is there and writable already; the code's part is made
++    // executable as it is committed.
++    if (uint8_t* const base = xe::chimera::FlatBase()) {
++      indirection_table_base_ =
++          base + (uint64_t(xe::chimera::kIndirectionDisp) + kIndirectionTableBase);
++      generated_code_execute_base_ = base + xe::chimera::kCodeBase;
++      generated_code_write_base_ = generated_code_execute_base_;
++      generated_code_map_.reserve(kMaximumFunctionCount);
++      return true;
++    }
++    XELOGE("The code cache needs the console's memory to exist first");
++    return false;
++#endif
+     indirection_table_base_ = reinterpret_cast<uint8_t*>(xe::memory::AllocFixed(
+         reinterpret_cast<void*>(kIndirectionTableBase), kIndirectionTableSize,
+         xe::memory::AllocationType::kReserve,
+@@ -366,6 +403,9 @@ class CodeCacheBase : public CodeCache {
+   size_t generated_code_offset_ = 0;
+   std::atomic<size_t> generated_code_commit_mark_ = {0};
+   std::vector<std::pair<uint64_t, GuestFunction*>> generated_code_map_;
++#ifdef CHIMERA_FLATMEM
++  std::vector<std::pair<uint32_t, uint32_t>> committed_ranges_;
++#endif
+ 
+  private:
+   Derived& self() { return static_cast<Derived&>(*this); }
+diff --git a/src/xenia/cpu/backend/x64/x64_backend.cc b/src/xenia/cpu/backend/x64/x64_backend.cc
+index 3e52e704e..b8c9ab999 100644
+--- a/src/xenia/cpu/backend/x64/x64_backend.cc
++++ b/src/xenia/cpu/backend/x64/x64_backend.cc
+@@ -7,6 +7,7 @@
+  ******************************************************************************
+  */
+ 
++#include "xenia/base/chimera_flatmem.h"
+ #include "xenia/cpu/backend/x64/x64_backend.h"
+ 
+ #include <array>
+@@ -47,6 +48,14 @@ namespace cpu {
+ namespace backend {
+ namespace x64 {
+ 
++// chimera: how a helper names a place in the recompiler's constants - from
++// the memory base when the memory is one block, by its address otherwise
++#ifdef CHIMERA_FLATMEM
++#define CHIMERA_CONST(address) ConstAt(address)
++#else
++#define CHIMERA_CONST(address) (address)
++#endif
++
+ // For positive normal inputs, the VMX reciprocal-square-root estimate ignores
+ // the low 9 mantissa bits. The remaining 14 mantissa bits and the low exponent
+ // bit fully determine the estimated mantissa and its exponent adjustment.
+@@ -164,6 +173,11 @@ X64Backend::X64Backend() : Backend(), code_cache_(nullptr) {
+   cs_option(capstone_handle_, CS_OPT_SKIPDATA, CS_OPT_OFF);
+   uint32_t base_address = 0x10000;
+   void* buf_trampoline_code = nullptr;
++#ifdef CHIMERA_FLATMEM
++  // chimera: in the console's memory block, once there is one (Initialize)
++  guest_trampoline_address_bitmap_.Resize(MAX_GUEST_TRAMPOLINES);
++  return;
++#endif
+   while (base_address < 0x80000000) {
+     buf_trampoline_code = memory::AllocFixed(
+         (void*)(uintptr_t)base_address,
+@@ -188,6 +202,9 @@ X64Backend::~X64Backend() {
+ 
+   X64Emitter::FreeConstData(emitter_data_);
+   ExceptionHandler::Uninstall(&ExceptionCallbackThunk, this);
++#ifdef CHIMERA_FLATMEM
++  guest_trampoline_memory_ = nullptr;  // chimera: the memory block's
++#endif
+   if (guest_trampoline_memory_) {
+     memory::DeallocFixed(
+         guest_trampoline_memory_,
+@@ -304,6 +321,17 @@ bool X64Backend::Initialize(Processor* processor) {
+   // HV range
+   code_cache()->CommitExecutableRange(GUEST_TRAMPOLINE_BASE,
+                                       GUEST_TRAMPOLINE_END);
++#ifdef CHIMERA_FLATMEM
++  // chimera: the trampolines, in the part of the block nothing else uses
++  guest_trampoline_memory_ =
++      xe::chimera::FlatBase() + xe::chimera::kTrampolineBase;
++  static_assert(sizeof(guest_trampoline_template) * MAX_GUEST_TRAMPOLINES <=
++                xe::chimera::kCodeBase - xe::chimera::kTrampolineBase);
++  memory::AllocFixed(guest_trampoline_memory_,
++                     sizeof(guest_trampoline_template) * MAX_GUEST_TRAMPOLINES,
++                     xe::memory::AllocationType::kCommit,
++                     xe::memory::PageAccess::kExecuteReadWrite);
++#endif
+   // Allocate emitter constant data.
+   emitter_data_ = X64Emitter::PlaceConstData();
+ 
+@@ -1244,8 +1272,14 @@ void* X64HelperEmitter::EmitScalarVRsqrteHelper() {
+   sar(ecx, 1);
+   or_(eax, r9d);
+   xor_(eax, 16);
++#ifdef CHIMERA_FLATMEM
++  mov(r9d, ptr[ConstAt(backend()->LookupXMMConstantAddress(
++                   XMMVRsqrteTableStart)) +
++               rax * 4]);
++#else
+   mov(r9d, ptr[backend()->LookupXMMConstantAddress32(XMMVRsqrteTableStart) +
+                rax * 4]);
++#endif
+   mov(eax, r9d);
+   shr(r9d, 16);
+   imul(edx, r9d);
+@@ -1382,14 +1416,14 @@ void* X64HelperEmitter::EmitVectorVRsqrteHelper(void* scalar_helper) {
+ 
+   L(check_scalar_operation_in_vmx);
+ 
+-  vptest(xmm0, ptr[backend()->LookupXMMConstantAddress(XMMThreeFloatMask)]);
++  vptest(xmm0, ptr[CHIMERA_CONST(backend()->LookupXMMConstantAddress(XMMThreeFloatMask))]);
+   jnz(actual_vector_version);
+   vshufps(xmm0, xmm0, xmm0, _MM_SHUFFLE(3, 3, 3, 3));
+   call(scalar_helper);
+   // this->DebugBreak();
+   vinsertps(xmm0, xmm0, (3 << 4));
+ 
+-  vblendps(xmm0, xmm0, ptr[backend()->LookupXMMConstantAddress(XMMFloatInf)],
++  vblendps(xmm0, xmm0, ptr[CHIMERA_CONST(backend()->LookupXMMConstantAddress(XMMFloatInf))],
+            0b0111);
+ 
+   ret();
+diff --git a/src/xenia/cpu/backend/x64/x64_emitter.h b/src/xenia/cpu/backend/x64/x64_emitter.h
+index c33f8b395..97fe00c1c 100644
+--- a/src/xenia/cpu/backend/x64/x64_emitter.h
++++ b/src/xenia/cpu/backend/x64/x64_emitter.h
+@@ -274,6 +274,10 @@ class X64Emitter : public Xbyak::CodeGenerator {
+ 
+   Xbyak::Reg64 GetContextReg() const;
+   Xbyak::Reg64 GetMembaseReg() const;
++#ifdef CHIMERA_FLATMEM
++  // chimera: an address in the recompiler's constants, from the memory base
++  Xbyak::RegExp ConstAt(const void* address) const;
++#endif
+   bool CanUseMembaseLow32As0() const { return may_use_membase32_as_zero_reg_; }
+   void ReloadMembase();
+ 

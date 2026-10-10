@@ -1,9 +1,9 @@
 diff --git a/src/xenia/base/chimera_flatmem.h b/src/xenia/base/chimera_flatmem.h
 new file mode 100644
-index 000000000..ec3aaeab3
+index 000000000..8a4c22984
 --- /dev/null
 +++ b/src/xenia/base/chimera_flatmem.h
-@@ -0,0 +1,45 @@
+@@ -0,0 +1,81 @@
 +// chimera: the console's memory without views.
 +//
 +// Upstream maps one shared file at several places: the 512 MiB of physical
@@ -44,6 +44,42 @@ index 000000000..ec3aaeab3
 +constexpr uint32_t FoldAddress(uint32_t address) {
 +  return address + FoldDelta(address >> 24);
 +}
++
++// ---------------------------------------------------------------------------
++// The recompiler's own things, by the same base.
++//
++// Upstream's x64 backend keeps its table of function addresses at host
++// address 0x80000000, its code at 0xA0000000, its constants at 0x20000000 and
++// its trampolines somewhere below 2 GiB, and reaches all of them by 32-bit
++// absolute addresses. A guest has nothing below 4 GiB. Here they are at
++// fixed places relative to the block, and generated code reaches them from
++// the register that always holds the block's address:
++//
++//   base - kBelowBlock      room below the block
++//   base - kConstDataBelow    the recompiler's constants
++//   base - kFoldTableBelow    the fold table
++//   base + 0 .. 4 GiB       the console's address space, of which the top
++//                           GiB is never touched (it is folded away), so:
++//   base + kTrampolineBase    host trampolines a guest can call
++//   base + kCodeBase          generated code
++//   base + kIndirectionDisp + g   the table's slot for guest address g, which
++//                           begins in the block's last 64 KiB and runs
++//                           kAfterBlock past its end
++//
++// The block's address is a multiple of 4 GiB. So the low 32 bits of any
++// address in it are its distance from the base - which is what the backend
++// already keeps wherever it keeps "a 32-bit host address".
++constexpr uint64_t kBelowBlock = 0x10000;
++constexpr uint32_t kConstDataBelow = 0x8000;
++constexpr uint32_t kConstDataRoom = kConstDataBelow - 0x1000;
++constexpr uint32_t kTrampolineBase = 0xC0100000u;
++constexpr uint32_t kCodeBase = 0xC1000000u;
++constexpr uint32_t kIndirectionDisp = 0x7FFF0000u;
++constexpr uint64_t kAfterBlock = 0x20000000ull;
++
++// The block, once Memory has made it; null before.
++uint8_t* FlatBase();
++void SetFlatBase(uint8_t* base);
 +
 +}  // namespace chimera
 +}  // namespace xe
@@ -224,7 +260,7 @@ index 0c46e8c1e..c8a749735 100644
  #if XE_PLATFORM_WIN32 == 1
      if (guest_address >=
 diff --git a/src/xenia/memory.cc b/src/xenia/memory.cc
-index 706bd4809..3c5e7a104 100644
+index 706bd4809..c64b58a92 100644
 --- a/src/xenia/memory.cc
 +++ b/src/xenia/memory.cc
 @@ -7,6 +7,7 @@
@@ -235,26 +271,38 @@ index 706bd4809..3c5e7a104 100644
  #include "xenia/memory.h"
  
  #include <cstring>
-@@ -162,6 +163,18 @@ Memory::~Memory() {
+@@ -52,6 +53,13 @@ DEFINE_int32(scribble_heap_value, 0,
+              "Memory");
+ 
+ namespace xe {
++#ifdef CHIMERA_FLATMEM
++namespace chimera {
++static uint8_t* g_flat_base = nullptr;
++uint8_t* FlatBase() { return g_flat_base; }
++void SetFlatBase(uint8_t* base) { g_flat_base = base; }
++}  // namespace chimera
++#endif
+ uint32_t get_page_count(uint32_t value, uint32_t page_size) {
+   return xe::round_up(value, page_size) / page_size;
+ }
+@@ -162,6 +170,16 @@ Memory::~Memory() {
    heaps_.vE0000000.Dispose();
    heaps_.physical.Dispose();
  
 +#ifdef CHIMERA_FLATMEM
 +  // chimera: the one block, with the table's room below it
-+  if (mapping_base_) {
-+    const size_t table_room = xe::memory::allocation_granularity() > 0x1000
-+                                  ? xe::memory::allocation_granularity()
-+                                  : 0x1000;
-+    xe::memory::DeallocFixed(mapping_base_ - table_room,
-+                             table_room + 0x100000000ull,
++  if (flat_reservation_) {
++    chimera::SetFlatBase(nullptr);
++    xe::memory::DeallocFixed(flat_reservation_, flat_reservation_size_,
 +                             xe::memory::DeallocationType::kRelease);
++    flat_reservation_ = nullptr;
 +    mapping_base_ = nullptr;
 +  }
 +#endif
    // Unmap all views and close mapping.
    if (mapping_ != xe::memory::kFileMappingHandleInvalid) {
      UnmapViews();
-@@ -175,6 +188,33 @@ Memory::~Memory() {
+@@ -175,6 +193,39 @@ Memory::~Memory() {
  }
  
  bool Memory::Initialize() {
@@ -263,19 +311,25 @@ index 706bd4809..3c5e7a104 100644
 +  // holds the fold table; the pages are the host's to commit as they are
 +  // touched, as the file's were.
 +  {
-+    const size_t table_room = xe::memory::allocation_granularity() > 0x1000
-+                                  ? xe::memory::allocation_granularity()
-+                                  : 0x1000;
-+    auto* block = reinterpret_cast<uint8_t*>(xe::memory::AllocFixed(
-+        nullptr, table_room + 0x100000000ull,
++    // Room below for the recompiler's constants and the fold table, room
++    // after for its function table, and 4 GiB to spare so that the block
++    // itself can begin on a multiple of 4 GiB (base/chimera_flatmem.h).
++    flat_reservation_size_ = 0x100000000ull + chimera::kBelowBlock +
++                             0x100000000ull + chimera::kAfterBlock;
++    flat_reservation_ = reinterpret_cast<uint8_t*>(xe::memory::AllocFixed(
++        nullptr, flat_reservation_size_,
 +        xe::memory::AllocationType::kReserveCommit,
 +        xe::memory::PageAccess::kReadWrite));
-+    if (!block) {
++    if (!flat_reservation_) {
 +      XELOGE("Unable to reserve the 4gb guest address space.");
 +      assert_always();
 +      return false;
 +    }
-+    mapping_base_ = block + table_room;
++    mapping_base_ = reinterpret_cast<uint8_t*>(
++        (reinterpret_cast<uintptr_t>(flat_reservation_) + chimera::kBelowBlock +
++         0xFFFFFFFFull) &
++        ~uintptr_t(0xFFFFFFFFull));
++    chimera::SetFlatBase(mapping_base_);
 +    auto* fold =
 +        reinterpret_cast<uint32_t*>(mapping_base_ - chimera::kFoldTableBelow);
 +    for (uint32_t top = 0; top < 256; top++) {
@@ -288,7 +342,7 @@ index 706bd4809..3c5e7a104 100644
    file_name_ = fmt::format("xenia_memory_{}", Clock::QueryHostTickCount());
  
    // Create main page file-backed mapping. This is all reserved but
-@@ -206,6 +246,7 @@ bool Memory::Initialize() {
+@@ -206,6 +257,7 @@ bool Memory::Initialize() {
    }
    virtual_membase_ = mapping_base_;
    physical_membase_ = mapping_base_ + 0x100000000ull;
@@ -296,7 +350,7 @@ index 706bd4809..3c5e7a104 100644
  
    // Prepare virtual heaps.
    heaps_.v00000000.Initialize(this, virtual_membase_, HeapType::kGuestVirtual,
-@@ -601,12 +642,23 @@ bool Memory::AccessViolationCallback(
+@@ -601,12 +653,23 @@ bool Memory::AccessViolationCallback(
    // Access via physical_membase_ is special, when need to bypass everything
    // (for instance, for a data provider to actually write the data) so only
    // triggering callbacks on virtual memory regions.
@@ -320,7 +374,7 @@ index 706bd4809..3c5e7a104 100644
    uint32_t virtual_address = HostToGuestVirtual(host_address);
    BaseHeap* heap = LookupHeap(virtual_address);
    if (heap->heap_type() != HeapType::kGuestPhysical) {
-@@ -1598,8 +1650,9 @@ bool BaseHeap::Protect(uint32_t address, uint32_t size, uint32_t protect,
+@@ -1598,8 +1661,9 @@ bool BaseHeap::Protect(uint32_t address, uint32_t size, uint32_t protect,
          }
  
          xe::memory::Protect(
@@ -332,7 +386,7 @@ index 706bd4809..3c5e7a104 100644
              xe_page_size, host_access, nullptr);
        }
  
-@@ -2084,7 +2137,8 @@ template <bool enable_invalidation_notifications, bool enable_data_providers>
+@@ -2084,7 +2148,8 @@ template <bool enable_invalidation_notifications, bool enable_data_providers>
  XE_NOINLINE void PhysicalHeap::EnableAccessCallbacksInner(
      const uint32_t system_page_first, const uint32_t system_page_last,
      xe::memory::PageAccess protect_access) XE_RESTRICT {
@@ -342,7 +396,7 @@ index 706bd4809..3c5e7a104 100644
    uint32_t protect_system_page_first = UINT32_MAX;
  
    SystemPageFlagsBlock* XE_RESTRICT sys_page_flags = system_page_flags_.data();
-@@ -2250,7 +2304,8 @@ bool PhysicalHeap::TriggerCallbacks(
+@@ -2250,7 +2315,8 @@ bool PhysicalHeap::TriggerCallbacks(
      // read-only if it also has a write watch, otherwise restore the guest
      // protection. Then clear the read watch.
      if (unprotect) {
@@ -352,7 +406,7 @@ index 706bd4809..3c5e7a104 100644
        for (uint32_t i = system_page_first; i <= system_page_last; ++i) {
          uint64_t bit = uint64_t(1) << (i & 63);
          SystemPageFlagsBlock& flags = system_page_flags_[i >> 6];
-@@ -2376,7 +2431,8 @@ bool PhysicalHeap::TriggerCallbacks(
+@@ -2376,7 +2442,8 @@ bool PhysicalHeap::TriggerCallbacks(
  
    // Unprotect ranges that need unprotection.
    if (unprotect) {
@@ -363,7 +417,7 @@ index 706bd4809..3c5e7a104 100644
      for (uint32_t i = system_page_first; i <= system_page_last; ++i) {
        // Check if need to allow writing to this page. Read-watched pages are
 diff --git a/src/xenia/memory.h b/src/xenia/memory.h
-index 9cd67e30a..edb6ac178 100644
+index 9cd67e30a..82d1e8d89 100644
 --- a/src/xenia/memory.h
 +++ b/src/xenia/memory.h
 @@ -18,6 +18,7 @@
@@ -407,3 +461,15 @@ index 9cd67e30a..edb6ac178 100644
  #else
      uint8_t* host_address = virtual_membase_ + guest_address;
      const auto heap = LookupHeap(guest_address);
+@@ -645,6 +665,11 @@ class Memory {
+   xe::memory::FileMappingHandle mapping_ =
+       xe::memory::kFileMappingHandleInvalid;
+   uint8_t* mapping_base_ = nullptr;
++#ifdef CHIMERA_FLATMEM
++  // chimera: everything that was reserved for the one block
++  uint8_t* flat_reservation_ = nullptr;
++  size_t flat_reservation_size_ = 0;
++#endif
+   union {
+     struct {
+       uint8_t* v00000000;
