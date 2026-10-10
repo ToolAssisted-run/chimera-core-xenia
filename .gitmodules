@@ -1,0 +1,7 @@
+[submodule "extern/xenia"]
+	path = extern/xenia
+	url = https://github.com/xenia-canary/xenia-canary
+	branch = canary_experimental
+[submodule "extern/spirv-headers"]
+	path = extern/spirv-headers
+	url = https://github.com/KhronosGroup/SPIRV-Headers

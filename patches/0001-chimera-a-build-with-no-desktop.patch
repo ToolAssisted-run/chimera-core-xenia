@@ -1,0 +1,138 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 30febc4b7..7b7b7ad3c 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -36,6 +36,12 @@ message(STATUS "Target architecture: XE_TARGET_AARCH64=${XE_TARGET_AARCH64} XE_T
+ # Options
+ option(XENIA_BUILD_TESTS "Build test suites" OFF)
+ option(XENIA_BUILD_MISC "Build misc subprojects (trace viewers, shader compiler, vfs-dump, demos)" OFF)
++# chimera: the emulator as libraries and nothing that needs a desktop - no
++# window, no toolkit, no host audio or pad driver, no application.
++option(CHIMERA_HEADLESS "Build without the window system and the application" OFF)
++if(CHIMERA_HEADLESS)
++  add_compile_definitions(CHIMERA_HEADLESS=1)
++endif()
+ 
+ # Toggle profiler
+ add_compile_definitions(XE_OPTION_PROFILING=0)
+@@ -248,6 +254,9 @@ else()
+       pthread
+     )
+   elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
++    if(CHIMERA_HEADLESS)
++      link_libraries(stdc++fs dl pthread rt)
++    else()
+     # GTK3 via pkg-config
+     find_package(PkgConfig REQUIRED)
+     pkg_check_modules(GTK3 REQUIRED gtk+-x11-3.0)
+@@ -257,6 +266,7 @@ else()
+ 
+     # Global Linux libraries
+     link_libraries(stdc++fs dl lz4 pthread rt)
++    endif()
+ 
+     # Link groups for executables (resolves circular deps)
+     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--start-group")
+diff --git a/cmake/XeniaHelpers.cmake b/cmake/XeniaHelpers.cmake
+index b712553ca..aaff6ce0e 100644
+--- a/cmake/XeniaHelpers.cmake
++++ b/cmake/XeniaHelpers.cmake
+@@ -70,11 +70,15 @@ function(xe_platform_sources target base_path)
+       "${base_path}/*_linux.cc"
+       "${base_path}/*_gnulinux.h"
+       "${base_path}/*_gnulinux.cc"
+-      "${base_path}/*_x11.h"
+-      "${base_path}/*_x11.cc"
+-      "${base_path}/*_gtk.h"
+-      "${base_path}/*_gtk.cc"
+     )
++    if(NOT CHIMERA_HEADLESS)
++      file(${glob_mode} _desktop_sources        "${base_path}/*_x11.h"
++        "${base_path}/*_x11.cc"
++        "${base_path}/*_gtk.h"
++        "${base_path}/*_gtk.cc"
++      )
++      list(APPEND _plat_sources ${_desktop_sources})
++    endif()
+   endif()
+ 
+   list(APPEND _sources ${_plat_sources})
+diff --git a/src/xenia/CMakeLists.txt b/src/xenia/CMakeLists.txt
+index f73d1e2bf..6c78ca5da 100644
+--- a/src/xenia/CMakeLists.txt
++++ b/src/xenia/CMakeLists.txt
+@@ -35,6 +35,7 @@ if(NOT APPLE)
+   add_subdirectory(ui/vulkan)
+ endif()
+ add_subdirectory(vfs)
++if(NOT CHIMERA_HEADLESS)
+ add_subdirectory(debug/ui)
+ add_subdirectory(app/discord)
+ add_subdirectory(app)
+@@ -49,6 +50,7 @@ add_subdirectory(hid/keyboard)
+ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+   add_subdirectory(apu/alsa)
+ endif()
++endif()
+ 
+ if(WIN32)
+   add_subdirectory(apu/xaudio2)
+diff --git a/src/xenia/ui/CMakeLists.txt b/src/xenia/ui/CMakeLists.txt
+index fc0d69f85..5ab9d4a8c 100644
+--- a/src/xenia/ui/CMakeLists.txt
++++ b/src/xenia/ui/CMakeLists.txt
+@@ -12,7 +12,7 @@ endif()
+ target_link_libraries(xenia-ui PUBLIC xenia-base)
+ if(WIN32)
+   target_link_libraries(xenia-ui PRIVATE dwmapi dxgi winmm)
+-elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
++elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT CHIMERA_HEADLESS)
+   target_link_libraries(xenia-ui PRIVATE xcb X11 X11-xcb fontconfig ${GTK3_LIBRARIES})
+ endif()
+ xe_target_defaults(xenia-ui)
+diff --git a/src/xenia/ui/imgui_drawer.cc b/src/xenia/ui/imgui_drawer.cc
+index d803160c7..5420bc405 100644
+--- a/src/xenia/ui/imgui_drawer.cc
++++ b/src/xenia/ui/imgui_drawer.cc
+@@ -31,11 +31,12 @@
+ #include <ShlObj_core.h>
+ #endif
+ 
+-#if XE_PLATFORM_LINUX
++// chimera: a headless build has no desktop to ask for a font or a clipboard
++#if XE_PLATFORM_LINUX && !defined(CHIMERA_HEADLESS)
+ #include <fontconfig/fontconfig.h>
+ #endif
+ 
+-#ifdef XE_PLATFORM_LINUX
++#if defined(XE_PLATFORM_LINUX) && !defined(CHIMERA_HEADLESS)
+ #include <gtk/gtk.h>
+ #endif
+ 
+@@ -141,7 +142,7 @@ void ImGuiDrawer::RemoveNotification(ImGuiNotification* dialog) {
+   DetachIfLastWindowRemoved();
+ }
+ 
+-#ifdef XE_PLATFORM_LINUX
++#if defined(XE_PLATFORM_LINUX) && !defined(CHIMERA_HEADLESS)
+ static void SetClipboardText(void* user_data, const char* text) {
+   GtkClipboard* clipboard = gtk_clipboard_get(GDK_SELECTION_CLIPBOARD);
+   gtk_clipboard_set_text(clipboard, text, -1);
+@@ -169,7 +170,7 @@ void ImGuiDrawer::Initialize() {
+   InitializeFonts(font_size);
+   InitializeFonts(title_font_size);
+ 
+-#ifdef XE_PLATFORM_LINUX
++#if defined(XE_PLATFORM_LINUX) && !defined(CHIMERA_HEADLESS)
+   io.SetClipboardTextFn = SetClipboardText;
+   io.GetClipboardTextFn = GetClipboardText;
+ #endif
+@@ -439,7 +440,7 @@ bool ImGuiDrawer::LoadJapaneseFont(ImGuiIO& io, float font_size) {
+   return true;
+ #endif
+ 
+-#if XE_PLATFORM_LINUX
++#if XE_PLATFORM_LINUX && !defined(CHIMERA_HEADLESS)
+   // On Linux, find and merge CJK font using fontconfig
+   FcConfig* config = FcInitLoadConfigAndFonts();
+   if (!config) {
