@@ -155,9 +155,16 @@ CORE_EXPORT int Init(void) {
   }
   const std::string settings = read_file("settings");
   chimera_xenia::Options options;
+  // "vulkan-hw": named so that a frontend knows to hand the graphics device
+  // over. The gate's runners say "vulkan".
   const std::string renderer = json_string(settings, "renderer");
-  if (!renderer.empty()) {
-    options.renderer = renderer;
+  if (renderer == "vulkan-hw" || renderer == "vulkan") {
+    options.renderer = "vulkan";
+  } else if (renderer == "null" || renderer.empty()) {
+    options.renderer = "null";
+  } else {
+    g_error = "no such renderer: " + renderer;
+    return 0;
   }
   const std::string pads = json_string(settings, "pads");
   if (!pads.empty()) {
@@ -185,13 +192,15 @@ CORE_EXPORT void SetAxis(int32_t index, int32_t value) {
   }
 }
 
-// The buttons: sixteen bits a port, the first port lowest, each the console's
-// own word (the d-pad from bit 0, Start, Back, the stick presses, the
-// shoulders, Guide at bit 10, and A, B, X, Y from bit 12).
+// The buttons: fifteen bits a port, the first port lowest, in the order the
+// package declares them (waterbox.config) - the d-pad's four, Start, Back,
+// the two stick presses, the two shoulders, Guide, then A, B, X, Y. That is
+// the console's own word with its one unused bit (11) closed up.
 CORE_EXPORT void FrameAdvance(uint64_t buttons) {
   for (int port = 0; port < chimera_xenia::PORTS; port++) {
-    chimera_xenia::set_pad(port, static_cast<uint16_t>(buttons >> (16 * port)),
-                           g_axes + port * chimera_xenia::AXES_PER_PORT);
+    const uint32_t declared = static_cast<uint32_t>(buttons >> (15 * port)) & 0x7FFF;
+    const uint16_t word = static_cast<uint16_t>((declared & 0x07FF) | ((declared >> 11) << 12));
+    chimera_xenia::set_pad(port, word, g_axes + port * chimera_xenia::AXES_PER_PORT);
   }
   chimera_xenia::frame();
 }

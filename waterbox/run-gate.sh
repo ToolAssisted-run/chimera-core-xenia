@@ -4,6 +4,7 @@
 #
 #   waterbox/run-gate.sh
 #
+# CHIMERA_ROOT=<a Chimera checkout> adds the frontend legs (see them below).
 # Needs waterbox/build-native.sh to have run; the sandbox legs need
 # waterbox/build-guest.sh, and the instruction tests' leg
 # waterbox/build-ppc-tests.sh and waterbox/run-ppc-tests.sh (the reference).
@@ -37,7 +38,8 @@ game="${XENIA_TEST_GAME:-$root/tests/roms/Mirrors Edge [NTSCU][NTSCJ].iso}"
 frames="${XENIA_GATE_FRAMES:-300}"
 half=$((frames / 2))
 # a button held for a while in the middle of the run: A on the first pad
-press="--press $half:10:1000"
+# (the twelfth button a pad declares)
+press="--press $half:10:800"
 have_native=0; have_sandbox=0
 [ -x "$run" ] && [ -f "$game" ] && have_native=1
 [ -x "$wbx/run-wbx" ] && [ -f "$wbx/core.wbx" ] && [ -f "$game" ] && have_sandbox=1
@@ -206,6 +208,67 @@ else
 		report "picture:other-process" PASS "saved after frame $at ($(sed -n 's/^state: \([0-9]*\) bytes.*/\1/p' "$work/m3.err") bytes), loaded by another process on its own device, it ends with the unbroken run's picture"
 	else
 		report "picture:other-process" FAIL "unbroken [$(last "$work/m0.out")] carried on [$(last "$work/m4.out")] $(tail -1 "$work/m4.err")"
+	fi
+fi
+
+# The package in the frontend's own engine (chimera-run, from a Chimera
+# checkout named by CHIMERA_ROOT that has the package installed by
+# waterbox/build-package.sh and an engine with the Vulkan bridge):
+#  - a movie recorded there and played back there shows, at a frame, the
+#    picture this repository's own runner has at that frame;
+#  - the same movie with the engine's own save and load before every frame
+#    shows the same picture;
+#  - with no graphics card handed over the package refuses to start and says
+#    why, and with the renderer that draws nothing it runs.
+chimera_root="${CHIMERA_ROOT:-}"
+engine="$chimera_root/build/meson-linux/chimera-run"
+package="$chimera_root/build/Cores/xenia.chimeraCore"
+same="$here/tests/same-picture.py"
+if [ -z "$chimera_root" ] || [ ! -x "$engine" ] || [ ! -f "$package" ]; then
+	why="set CHIMERA_ROOT to a Chimera checkout with build/meson-linux/chimera-run and the package (waterbox/build-package.sh -r <it>)"
+	report "frontend:picture" SKIP "$why"
+	report "frontend:states" SKIP "$why"
+	report "frontend:no-card" SKIP "$why"
+elif [ "$have_sandbox" = 0 ]; then
+	report "frontend:picture" SKIP "$why_sandbox"
+	report "frontend:states" SKIP "$why_sandbox"
+	report "frontend:no-card" SKIP "$why_sandbox"
+else
+	fe_frames=100
+	shot=80
+	: > "$work/empty.movie"
+	env -u DISPLAY "$engine" "$package" "$game" "$work/empty.movie" --frames "$fe_frames" --record "$work/fe.movie" --gpu > "$work/fe-record.out" 2>&1
+	env -u DISPLAY "$engine" "$package" "$game" "$work/fe.movie" --gpu --screenshot "$shot=$work/fe.tga" > "$work/fe-play.out" 2>&1
+	played=$?
+	if grep -q "no Vulkan on this machine" "$work/fe-play.out"; then
+		report "frontend:picture" SKIP "no Vulkan on this machine"
+		report "frontend:states" SKIP "no Vulkan on this machine"
+	else
+		# the engine counts frames from 0, the runner from 1
+		sandbox fe --frames $((shot + 1)) --renderer vulkan --ppm "$work/fe.ppm"
+		verdict="$(python3 "$same" "$work/fe.tga" "$work/fe.ppm" 2>&1)"; same_rc=$?
+		if [ "$played" = 0 ] && grep -q "^frames=$fe_frames" "$work/fe-play.out" && grep -q "chimera vk: the bridge was handed over" "$work/fe-play.out" && [ "$same_rc" = 0 ]; then
+			report "frontend:picture" PASS "a movie of $fe_frames frames in chimera-run: its picture at frame $shot is this repository's runner's ($verdict)"
+		else
+			report "frontend:picture" FAIL "chimera-run exit $played; pictures: $verdict; $(tail -1 "$work/fe-play.out")"
+		fi
+		env -u DISPLAY "$engine" "$package" "$game" "$work/fe.movie" --gpu --rerecord --screenshot "$shot=$work/fe-states.tga" > "$work/fe-states.out" 2>&1
+		stated=$?
+		verdict="$(python3 "$same" "$work/fe-states.tga" "$work/fe.tga" 2>&1)"; same_rc=$?
+		if [ "$stated" = 0 ] && grep -q "^frames=$fe_frames" "$work/fe-states.out" && [ "$same_rc" = 0 ]; then
+			report "frontend:states" PASS "the same movie with the engine's save and load before every frame, each load a new device: the same picture at frame $shot ($verdict)"
+		else
+			report "frontend:states" FAIL "chimera-run --rerecord exit $stated; pictures: $verdict; $(tail -1 "$work/fe-states.out")"
+		fi
+	fi
+	env -u DISPLAY "$engine" "$package" "$game" "$work/fe.movie" > "$work/fe-nocard.out" 2>&1
+	refused=$?
+	env -u DISPLAY "$engine" "$package" "$game" "$work/fe.movie" --settings '{"renderer":"null"}' > "$work/fe-null.out" 2>&1
+	ran=$?
+	if [ "$refused" != 0 ] && grep -q "the Vulkan renderer needs a device" "$work/fe-nocard.out" && [ "$ran" = 0 ] && grep -q "^frames=$fe_frames" "$work/fe-null.out"; then
+		report "frontend:no-card" PASS "with no card handed over the package refuses to start and says why (exit $refused); with the renderer that draws nothing it runs its $fe_frames frames"
+	else
+		report "frontend:no-card" FAIL "no card: exit $refused [$(tail -1 "$work/fe-nocard.out")]; renderer null: exit $ran [$(tail -1 "$work/fe-null.out")]"
 	fi
 fi
 

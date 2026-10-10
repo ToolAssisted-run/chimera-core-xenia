@@ -16,6 +16,7 @@ DECLARE_bool(emit_inline_mmio_checks);
 DECLARE_bool(disable_instruction_infocache);
 DECLARE_bool(store_shaders);
 DECLARE_int32(vulkan_pipeline_creation_threads);
+DECLARE_bool(vulkan_sparse_shared_memory);
 
 namespace chimera_xenia {
 
@@ -54,6 +55,12 @@ inline bool apply_machine_settings(std::string& error) {
   // start again - and a thread started later is a thread in another place
   // in the order, which is another machine.
   cvars::vulkan_pipeline_creation_threads = 0;
+
+  // The renderer's copy of the console's memory is one buffer of 512 MiB on
+  // every card. Upstream binds it sparsely where a card can, which is another
+  // set of commands on some cards and not on others; one path is one thing
+  // to have proved.
+  cvars::vulkan_sparse_shared_memory = false;
 
   const uint64_t have = xe::amd64::GetFeatureFlags();
   const uint64_t need = xe::amd64::kX64EmitAVX2 | xe::amd64::kX64EmitFMA;

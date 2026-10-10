@@ -93,7 +93,9 @@ exist.
 - **M4 - the picture**, through the Vulkan bridge. DONE 2026-10-10 on
   llvmpipe (below, two sections): it draws in the sandbox what it draws
   natively, and a load puts the renderer back on a new device.
-- **M5 - the package and the frontend.**
+- **M5 - the package and the frontend.** DONE 2026-10-10 as far as the
+  frontend's headless runner on Linux goes (below); nothing is published,
+  and the engine's half is on a branch that is the owner's to merge.
 
 ## M0: the build (2026-10-10)
 
@@ -665,18 +667,77 @@ Without the fetch (the first trial, and the gate's control): the same
 schedule and memory, and a black picture wherever a remake came between a
 resolve and the frame that showed it.
 
-**Not established.** A real card: llvmpipe has no fragment shader interlock,
-so only the path with host render targets has run, and the other path's
-put-back (a plain buffer copy) has never executed. Resolution above the
+**Not established.** A real card. The path with host render targets is the
+one every card takes (upstream's other path, fragment shader interlock, is
+only taken when asked for, and its put-back - a plain buffer copy - has
+never executed); the renderer's copy of the console's memory is one plain
+buffer on every card (`vulkan_sparse_shared_memory` off). So what a real
+card adds is its own driver, not another path of this code. Resolution above the
 console's: upstream's dump does not exist there and the fetch says so; the
 core draws at 1x. Speed: a save fetches 10 MiB and the resolved ranges from
 the device every time. A second game. And host depth: a depth buffer kept
 on the host at more than the console's 24 bits goes through the console's
 format on its way into a state, which upstream's own snapshot does too.
 
+## M5: the package, and the frontend's engine (2026-10-10)
+
+`waterbox/build-package.sh -r <a Chimera checkout>` builds the guest and
+installs `build/Cores/xenia.chimeraCore` there: the core, its declaration
+(`waterbox.config`), the keys (`default_keybinds.json`), the project form
+(`file_slots.json`) and the licences of what is in it
+(`package-licenses.json`).
+
+What the package declares:
+
+- one system, the Xbox 360, and one kind of file: a disc image (.iso);
+- four controllers of fifteen buttons and six axes each, named "P1 A" to
+  "P4 Right Stick Y"; the Controllers setting says how many are plugged in;
+- a Renderer setting: "vulkan-hw", Xenia's Vulkan renderer on the machine's
+  card (the name's ending is how a frontend knows to hand the card over), or
+  "null", which draws nothing and needs no card - the same machine either
+  way, so a movie made with one plays with the other;
+- a picture of 1280x720 at 60 Hz, sound at 48 kHz, a bus and no memory
+  domain, and that its states survive a new graphics device.
+
+**The engine's half** is not in this repository. A frontend has to hand the
+Vulkan bridge to a core that asks, tell the bridge when a state was loaded,
+and call `StateSaving` before it makes one (which it already does). That is
+some sixty lines of Chimera's engine and one more export a core may have
+(`SetVulkanBridge`), written on a branch (`vk-bridge`) of the checkout these
+legs run against, with its own section in Chimera's docs/gpu-bridge.md and
+design log. A new export is a change to what Chimera is, so merging it is
+the owner's.
+
+Measured through `chimera-run`, the frontend's headless runner, with that
+branch's engine, llvmpipe:
+
+| what | result |
+| --- | --- |
+| a movie of idle frames recorded by the engine and played back by it, `--gpu` | the bridge is handed over; the picture the engine is given at its frame 80 is this repository's runner's picture at its frame 81 (the engine counts from 0), pixel for pixel |
+| the same movie with the engine's own save and load before every frame | the same picture |
+| the same movie with no card asked for | refused before the machine starts: "the Vulkan renderer needs a device, and none was handed over" |
+| the same movie with the renderer "null" | runs to the end |
+
+The frontend's contract tests for installed packages found one thing: the
+`extensions` declaration is a map from an extension to a system, and the
+first draft had a list.
+
+**Not established.** The interface: only the headless runner has opened the
+package. Windows, where the owner's card is: the engine branch compiles for
+it and has not run there. A project (the wizard's form has not been looked
+at). Save data: the emulator's storage and content roots are names nothing
+is under, so a game that saves writes nowhere - and a game that will not
+start without a profile or a storage device will not start. The network: a
+game that opens a socket would end the machine (a guest may not), and
+nothing answers "there is no network" for it yet. The licence list was
+written from the tree and has not been reviewed; nothing may be published
+on it as it stands.
+
 ## The gate (2026-10-10)
 
-`waterbox/run-gate.sh`, 10 legs, six minutes: two native runs are one run
+`waterbox/run-gate.sh`, 13 legs with `CHIMERA_ROOT` set and 10 without,
+eight minutes. The three it adds are the frontend's, described under M5. The
+ten: two native runs are one run
 and a run with another instruction cost is another; the sandbox is the
 native run at every sixtieth frame; a button makes another run, the same in
 both; a state saved and loaded before each of 300 frames is the run that
@@ -701,6 +762,9 @@ Each leg has been seen to fail, by hand, once:
 - a state made without asking the device for what only it holds
   (`HARNESS_BREAK_NO_STATE_SAVING`): the same schedule and the same memory,
   and every picture after a load the blank one;
+- the frontend's picture against the runner's picture one frame away (the
+  comparison, `waterbox/tests/same-picture.py`, by hand): 118,639 of 921,600
+  pixels differ; and two blank pictures are refused as "same, and blank";
 - one failing test taken out of the reference (`XENIA_PPC_REFERENCE`): "1039
   fail, the reference says 1038", and the test is named;
 - a part of the instruction tests in which nothing fails is refused, which

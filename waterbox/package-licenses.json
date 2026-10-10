@@ -1,0 +1,190 @@
+{
+ "package": "xenia",
+ "effectiveTerms": "BSD-3-Clause, with LGPL-2.1 parts (FFmpeg, libmspack)",
+ "commercialUse": "allowed, on the BSD and LGPL terms",
+ "note": "The built core combines this repository's integration (MIT) with Xenia Canary, which is BSD-3-Clause, and the libraries it links. Two of them are LGPL: Xenia's fork of FFmpeg (for the console's XMA and WMA sound) and libmspack's LZX decoder; both are linked statically, and the exact source of each is named here so that the core can be built again with either replaced. Everything else is permissive or public domain. The package carries no game, no system software and no key: Xenia stands in for the console's system software.",
+ "components": [
+  {
+   "name": "chimera-core-xenia (integration)",
+   "license": "MIT, and Xenia's terms (BSD-3-Clause) for patches/",
+   "url": "https://github.com/ToolAssisted-run/chimera-core-xenia",
+   "commit": "{selfCommit}",
+   "file": "LICENSE"
+  },
+  {
+   "name": "Xenia Canary",
+   "license": "BSD-3-Clause",
+   "url": "https://github.com/xenia-canary/xenia-canary",
+   "commit": "{submodule:extern/xenia}",
+   "file": "extern/xenia/LICENSE",
+   "sourceUrl": "https://github.com/xenia-canary/xenia-canary/archive/{commit}.tar.gz"
+  },
+  {
+   "name": "FFmpeg (Xenia's fork: libavcodec, libavformat, libavutil)",
+   "license": "LGPL-2.1-or-later",
+   "url": "https://github.com/xenia-canary/FFmpeg",
+   "commit": "{submodule:extern/xenia/third_party/FFmpeg}",
+   "file": "extern/xenia/third_party/FFmpeg/COPYING.LGPLv2.1",
+   "sourceUrl": "https://github.com/xenia-canary/FFmpeg/archive/{commit}.tar.gz"
+  },
+  {
+   "name": "libmspack (the LZX decoder)",
+   "license": "LGPL-2.1-only",
+   "url": "https://www.cabextract.org.uk/libmspack/",
+   "file": "extern/xenia/third_party/mspack/COPYING.LIB"
+  },
+  {
+   "name": "Capstone",
+   "license": "BSD-3-Clause, and the LLVM licence for the parts that came from it",
+   "commit": "{submodule:extern/xenia/third_party/capstone}",
+   "file": "extern/xenia/third_party/capstone/LICENSES/LICENSE_BSD_3_CLAUSE.txt",
+   "url": "https://github.com/capstone-engine/capstone"
+  },
+  {
+   "name": "xbyak",
+   "license": "BSD-3-Clause",
+   "commit": "{submodule:extern/xenia/third_party/xbyak}",
+   "file": "extern/xenia/third_party/xbyak/COPYRIGHT",
+   "url": "https://github.com/herumi/xbyak"
+  },
+  {
+   "name": "fmt",
+   "license": "MIT",
+   "commit": "{submodule:extern/xenia/third_party/fmt}",
+   "file": "extern/xenia/third_party/fmt/LICENSE",
+   "url": "https://github.com/fmtlib/fmt"
+  },
+  {
+   "name": "Dear ImGui",
+   "license": "MIT",
+   "commit": "{submodule:extern/xenia/third_party/imgui}",
+   "file": "extern/xenia/third_party/imgui/LICENSE.txt",
+   "url": "https://github.com/ocornut/imgui"
+  },
+  {
+   "name": "glslang (the SPIR-V builder)",
+   "license": "BSD-3-Clause, and the other permissive terms its LICENSE.txt lists",
+   "commit": "{submodule:extern/xenia/third_party/glslang}",
+   "file": "extern/xenia/third_party/glslang/LICENSE.txt",
+   "url": "https://github.com/KhronosGroup/glslang"
+  },
+  {
+   "name": "Vulkan-Headers",
+   "license": "Apache-2.0 OR MIT",
+   "commit": "{submodule:extern/xenia/third_party/Vulkan-Headers}",
+   "file": "extern/xenia/third_party/Vulkan-Headers/LICENSE.md",
+   "url": "https://github.com/KhronosGroup/Vulkan-Headers"
+  },
+  {
+   "name": "Vulkan Memory Allocator",
+   "license": "MIT",
+   "commit": "{submodule:extern/xenia/third_party/VulkanMemoryAllocator}",
+   "file": "extern/xenia/third_party/VulkanMemoryAllocator/LICENSE.txt",
+   "url": "https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator"
+  },
+  {
+   "name": "snappy",
+   "license": "BSD-3-Clause",
+   "commit": "{submodule:extern/xenia/third_party/snappy}",
+   "file": "extern/xenia/third_party/snappy/COPYING",
+   "url": "https://github.com/google/snappy"
+  },
+  {
+   "name": "xxHash",
+   "license": "BSD-2-Clause",
+   "commit": "{submodule:extern/xenia/third_party/xxhash}",
+   "file": "extern/xenia/third_party/xxhash/LICENSE",
+   "url": "https://github.com/Cyan4973/xxHash"
+  },
+  {
+   "name": "Zstandard",
+   "license": "BSD-3-Clause (offered as BSD-3-Clause OR GPL-2.0-only)",
+   "commit": "{submodule:extern/xenia/third_party/zstd}",
+   "file": "extern/xenia/third_party/zstd/LICENSE",
+   "url": "https://github.com/facebook/zstd"
+  },
+  {
+   "name": "zlib-ng",
+   "license": "Zlib",
+   "commit": "{submodule:extern/xenia/third_party/zlib-ng}",
+   "file": "extern/xenia/third_party/zlib-ng/LICENSE.md",
+   "url": "https://github.com/zlib-ng/zlib-ng"
+  },
+  {
+   "name": "ZArchive",
+   "license": "MIT-0",
+   "commit": "{submodule:extern/xenia/third_party/zarchive}",
+   "file": "extern/xenia/third_party/zarchive/LICENSE",
+   "url": "https://github.com/Exzap/ZArchive"
+  },
+  {
+   "name": "pugixml",
+   "license": "MIT",
+   "commit": "{submodule:extern/xenia/third_party/pugixml}",
+   "file": "extern/xenia/third_party/pugixml/LICENSE.md",
+   "url": "https://github.com/zeux/pugixml"
+  },
+  {
+   "name": "toml++",
+   "license": "MIT",
+   "commit": "{submodule:extern/xenia/third_party/tomlplusplus}",
+   "file": "extern/xenia/third_party/tomlplusplus/LICENSE",
+   "url": "https://github.com/marzer/tomlplusplus"
+  },
+  {
+   "name": "date",
+   "license": "MIT",
+   "commit": "{submodule:extern/xenia/third_party/date}",
+   "file": "extern/xenia/third_party/date/LICENSE.txt",
+   "url": "https://github.com/HowardHinnant/date"
+  },
+  {
+   "name": "UTF8-CPP",
+   "license": "BSL-1.0",
+   "commit": "{submodule:extern/xenia/third_party/utfcpp}",
+   "file": "extern/xenia/third_party/utfcpp/LICENSE",
+   "url": "https://github.com/nemtrif/utfcpp"
+  },
+  {
+   "name": "RapidJSON",
+   "license": "MIT",
+   "commit": "{submodule:extern/xenia/third_party/rapidjson}",
+   "file": "extern/xenia/third_party/rapidjson/license.txt",
+   "url": "https://github.com/Tencent/rapidjson"
+  },
+  {
+   "name": "disruptorplus",
+   "license": "MIT",
+   "commit": "{submodule:extern/xenia/third_party/disruptorplus}",
+   "file": "extern/xenia/third_party/disruptorplus/LICENSE.txt",
+   "url": "https://github.com/lewissbaker/disruptorplus"
+  },
+  {
+   "name": "aes_128",
+   "license": "MIT",
+   "commit": "{submodule:extern/xenia/third_party/aes_128}",
+   "file": "extern/xenia/third_party/aes_128/LICENSE",
+   "url": "https://github.com/openluopworld/aes_128"
+  },
+  {
+   "name": "stb (image, image_write, sprintf)",
+   "license": "MIT or public domain, as each header says",
+   "file": "extern/xenia/third_party/stb/stb_image.h"
+  },
+  {
+   "name": "TinySHA1",
+   "license": "ISC-style, as its header says",
+   "file": "extern/xenia/third_party/crypto/TinySHA1.hpp"
+  },
+  {
+   "name": "rijndael-alg-fst",
+   "license": "public domain, as its header says",
+   "file": "extern/xenia/third_party/crypto/rijndael-alg-fst.c"
+  },
+  {
+   "name": "DXBC checksum",
+   "license": "MIT (Advanced Micro Devices), as its source says",
+   "file": "extern/xenia/third_party/dxbc/DXBCChecksum.cpp"
+  }
+ ]
+}

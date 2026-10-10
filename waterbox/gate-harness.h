@@ -8,7 +8,7 @@
  *                [--rerecord] [--save-state FILE --at F] [--state FILE]
  *
  * --press F:N:MASK  from frame F (the first is 1) for N frames, these button
- *                   bits (hex; sixteen a port, the console's own)
+ *                   bits (hex; fifteen a port, in the package's order)
  * --axis F:N:I:V    from frame F for N frames, axis I is V
  * --every K         a line of digest every K frames, and always one at the end
  * --rerecord        a state saved and loaded before every frame (sandbox)

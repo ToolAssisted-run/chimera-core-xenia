@@ -1,0 +1,107 @@
+{
+  "_comment": [
+    "The first controller on the keyboard and the first pad: the face buttons where an Xbox pad has them,",
+    "the D-pad on the arrows, the sticks and the triggers on the pad's own. The other controllers are left unbound."
+  ],
+  "AllTrollers": {
+    "Xbox 360 Controllers": {
+      "P1 Up": "Up, J1 POV1U, X1 DpadUp",
+      "P1 Down": "Down, J1 POV1D, X1 DpadDown",
+      "P1 Left": "Left, J1 POV1L, X1 DpadLeft",
+      "P1 Right": "Right, J1 POV1R, X1 DpadRight",
+      "P1 Start": "Enter, J1 B10, X1 Start",
+      "P1 Back": "Backspace, J1 B9, X1 Back",
+      "P1 Left Stick": "J1 B11, X1 LeftThumb",
+      "P1 Right Stick": "J1 B12, X1 RightThumb",
+      "P1 LB": "Q, J1 B5, X1 LeftShoulder",
+      "P1 RB": "W, J1 B6, X1 RightShoulder",
+      "P1 Guide": "",
+      "P1 A": "X, J1 B2, X1 A",
+      "P1 B": "C, J1 B3, X1 B",
+      "P1 X": "Z, J1 B1, X1 X",
+      "P1 Y": "S, J1 B4, X1 Y",
+      "P2 Up": "",
+      "P2 Down": "",
+      "P2 Left": "",
+      "P2 Right": "",
+      "P2 Start": "",
+      "P2 Back": "",
+      "P2 Left Stick": "",
+      "P2 Right Stick": "",
+      "P2 LB": "",
+      "P2 RB": "",
+      "P2 Guide": "",
+      "P2 A": "",
+      "P2 B": "",
+      "P2 X": "",
+      "P2 Y": "",
+      "P3 Up": "",
+      "P3 Down": "",
+      "P3 Left": "",
+      "P3 Right": "",
+      "P3 Start": "",
+      "P3 Back": "",
+      "P3 Left Stick": "",
+      "P3 Right Stick": "",
+      "P3 LB": "",
+      "P3 RB": "",
+      "P3 Guide": "",
+      "P3 A": "",
+      "P3 B": "",
+      "P3 X": "",
+      "P3 Y": "",
+      "P4 Up": "",
+      "P4 Down": "",
+      "P4 Left": "",
+      "P4 Right": "",
+      "P4 Start": "",
+      "P4 Back": "",
+      "P4 Left Stick": "",
+      "P4 Right Stick": "",
+      "P4 LB": "",
+      "P4 RB": "",
+      "P4 Guide": "",
+      "P4 A": "",
+      "P4 B": "",
+      "P4 X": "",
+      "P4 Y": ""
+    }
+  },
+  "AllTrollersAutoFire": {
+    "Xbox 360 Controllers": {}
+  },
+  "AllTrollersAnalog": {
+    "Xbox 360 Controllers": {
+      "P1 Left Trigger": {
+        "Value": "X1 LeftTrigger Axis",
+        "Mult": 1.0,
+        "Deadzone": 0.0
+      },
+      "P1 Right Trigger": {
+        "Value": "X1 RightTrigger Axis",
+        "Mult": 1.0,
+        "Deadzone": 0.0
+      },
+      "P1 Left Stick X": {
+        "Value": "X1 LeftThumbX Axis",
+        "Mult": 1.0,
+        "Deadzone": 0.1
+      },
+      "P1 Left Stick Y": {
+        "Value": "X1 LeftThumbY Axis",
+        "Mult": 1.0,
+        "Deadzone": 0.1
+      },
+      "P1 Right Stick X": {
+        "Value": "X1 RightThumbX Axis",
+        "Mult": 1.0,
+        "Deadzone": 0.1
+      },
+      "P1 Right Stick Y": {
+        "Value": "X1 RightThumbY Axis",
+        "Mult": 1.0,
+        "Deadzone": 0.1
+      }
+    }
+  }
+}
