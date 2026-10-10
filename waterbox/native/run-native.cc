@@ -16,6 +16,8 @@
 #include "xenia/base/console_app_main.h"
 #include "xenia/base/cvar.h"
 #include "xenia/base/logging.h"
+#include "xenia/base/platform_amd64.h"
+#include "xenia/cpu/backend/x64/x64_backend.h"
 #include "xenia/emulator.h"
 #include "xenia/gpu/command_processor.h"
 #include "xenia/gpu/graphics_system.h"
@@ -53,6 +55,21 @@ int RunNative(const std::vector<std::string>& args) {
 
   // The kernel's own switch for "nobody is there to answer a dialog".
   cvars::headless = true;
+
+  // What the recompiler may use of the host's processor is one value on every
+  // machine: AVX2 and FMA, and nothing else it knows of (user-decided,
+  // 2026-10-10). It emits different code with different features and the
+  // results differ - a fused multiply-add rounds once, two steps round twice -
+  // so a host without both cannot run the same machine, and is refused.
+  cvars::x64_extension_mask = xe::amd64::kX64EmitAVX2 | xe::amd64::kX64EmitFMA;
+  {
+    const uint64_t have = xe::amd64::GetFeatureFlags();
+    const uint64_t need = xe::amd64::kX64EmitAVX2 | xe::amd64::kX64EmitFMA;
+    if ((have & need) != need) {
+      std::fprintf(stderr, "run-native: this processor has no AVX2 or no FMA, and the core needs both\n");
+      return 1;
+    }
+  }
 
   const std::filesystem::path work = std::filesystem::absolute(cvars::work);
   std::filesystem::create_directories(work / "content");

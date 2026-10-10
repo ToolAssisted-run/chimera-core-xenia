@@ -262,9 +262,18 @@ features and 805 only without, nearly all of them `vmaddfp` and `vnmsubfp`,
 with a few `fmadd` and `fmsub`. A multiply-add computed by the host's fused
 instruction and one computed in two steps round differently. A movie made on
 one machine would not replay on another unless the mask is one value
-everywhere, so it will be a constant of the core and not a setting. Which
-value - nothing above AVX, which every machine that can run this has, or
-with FMA, which is nearer the console and faster - is not decided.
+everywhere, so it is a constant of the core and not a setting.
+
+**AVX2 and FMA, and nothing else (user-decided, 2026-10-10).** The choice
+was put to the owner as nothing above AVX (every machine that can run this
+has it), AVX2 with FMA (nearer the console's fused arithmetic, and faster,
+but a processor of 2013 or later), or measuring first; he chose "Require
+AVX2 + FMA". The driver sets `x64_extension_mask` to those two bits and
+refuses a host that lacks either; `run-ppc-tests.sh` runs upstream's tests
+with the same mask, and that result is the reference from here on: 142,097
+pass and 28,320 fail (the names' SHA-256 begins d1195e69efa280d0), which differs from
+the every-feature run above in 0 tests failing only now and 0 only
+then.
 
 ## What is the owner's
 

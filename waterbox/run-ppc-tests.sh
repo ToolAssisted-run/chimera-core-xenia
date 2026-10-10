@@ -16,7 +16,8 @@ bins="$root/build/ppc-tests/bin"
 [ -d "$bins" ] || { echo "no tests: run waterbox/build-ppc-tests.sh" >&2; exit 1; }
 log="$root/build/ppc-tests/native.log"
 # the runner's exit code is "some test failed", which is expected here
-(cd "$root/build" && "$runner" --test_bin_path="$bins/" --log_file=stdout > "$log" 2>&1) || true
+# the mask is the core's: AVX2 and FMA and nothing else (docs/PLAN.md)
+(cd "$root/build" && "$runner" --test_bin_path="$bins/" --log_file=stdout --x64_extension_mask=3 > "$log" 2>&1) || true
 grep -q '^Total tests:' "$log" || { tail -5 "$log" >&2; echo "the runner did not finish: $log" >&2; exit 1; }
 sed -n 's/^ *\[\([^]]*\)\] FAILED.*/\1/p' "$log" | sort -u > "$root/build/ppc-tests/native.failed"
 grep -E '^(Total tests|Passed|Failed):' "$log"
