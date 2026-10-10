@@ -72,6 +72,7 @@ folded, and a renderer that reaches a real card through a bridge that did not
 exist.
 
 - **M0 - a native headless reference.** In progress. The build: DONE
+  2026-10-10 (below). Upstream's instruction tests running on it: DONE
   2026-10-10 (below). A driver that boots a program with the null renderer
   and no window: not started.
 - **M1 - virtual time.** A scheduler behind `xe::threading`, a charge per
@@ -106,6 +107,45 @@ on Ubuntu 24.04:
 Not established by this: that anything runs. The emulator's own setup
 (`emulator.cc`) uses its window and its ImGui drawer in several places
 without asking whether there is one, which the driver will have to deal with.
+
+## The recompiler's own tests (2026-10-10)
+
+Upstream has 570 files of PowerPC instruction tests
+(`src/xenia/cpu/ppc/testing`), most of them generated on a real console. They
+put a few instructions at 0x82010000, run them on the recompiler with the
+emulated memory and nothing else - no kernel, no program - and compare the
+registers. That makes them the one part of this core that can be proved with
+no game, and so the first thing the sandboxed build will be held to.
+
+- `waterbox/build-ppc-tests.sh` builds the assembler upstream uses, binutils
+  2.24 with its VMX128 patch, out of the tree (the tarball's SHA-256 is
+  pinned and was the same from two mirrors), and assembles the tests the way
+  `xb gentests` does: twenty seconds in all.
+- The runner (`xenia-cpu-ppc-tests`) needed one more thing of the headless
+  build: a file picker to link against, which patch 0001 now gives it - one
+  that answers as a user who declines.
+- `waterbox/run-ppc-tests.sh` runs them and keeps the names of the ones that
+  fail.
+
+Measured, natively, twice with the same answer: **170,417 tests, 142,097
+pass, 28,320 fail**, in four minutes. The failures are upstream's and are
+almost all floating point: the fused multiply-add family (`fmadd`, `fmsub`,
+`fnmadd`, `fnmsub`, single and double, and `vmaddfp` and `vnmsubfp`) is some
+25,000 of them, the rest are spread over other float operations and two
+vector shifts. So the reference is not "they pass" but "these pass and
+these fail": the sandboxed build must fail the same 28,320.
+
+**What the recompiler emits depends on the host's CPU, and the results
+with it.** With `--x64_extension_mask=0` (AVX and nothing above it; this
+machine has AVX2, FMA, BMI2, F16C and MOVBE) it is 142,434 passing and
+27,983 failing - and not a subset: 1,142 tests fail only with the host's
+features and 805 only without, nearly all of them `vmaddfp` and `vnmsubfp`,
+with a few `fmadd` and `fmsub`. A multiply-add computed by the host's fused
+instruction and one computed in two steps round differently. A movie made on
+one machine would not replay on another unless the mask is one value
+everywhere, so it will be a constant of the core and not a setting. Which
+value - nothing above AVX, which every machine that can run this has, or
+with FMA, which is nearer the console and faster - is not decided.
 
 ## What is the owner's
 

@@ -78,10 +78,20 @@ index f73d1e2bf..6c78ca5da 100644
  if(WIN32)
    add_subdirectory(apu/xaudio2)
 diff --git a/src/xenia/ui/CMakeLists.txt b/src/xenia/ui/CMakeLists.txt
-index fc0d69f85..5ab9d4a8c 100644
+index fc0d69f85..67c7c4f3b 100644
 --- a/src/xenia/ui/CMakeLists.txt
 +++ b/src/xenia/ui/CMakeLists.txt
-@@ -12,7 +12,7 @@ endif()
+@@ -4,6 +4,9 @@ xe_platform_sources(xenia-ui ${CMAKE_CURRENT_SOURCE_DIR})
+ file(GLOB _ui_exclude   "${CMAKE_CURRENT_SOURCE_DIR}/*_demo.cc"
+   "${CMAKE_CURRENT_SOURCE_DIR}/windowed_app_main_*.cc"
+ )
++if(NOT CHIMERA_HEADLESS)
++  list(APPEND _ui_exclude "${CMAKE_CURRENT_SOURCE_DIR}/chimera_headless.cc")
++endif()
+ get_target_property(_ui_srcs xenia-ui SOURCES)
+ if(_ui_exclude AND _ui_srcs)
+   list(REMOVE_ITEM _ui_srcs ${_ui_exclude})
+@@ -12,7 +15,7 @@ endif()
  target_link_libraries(xenia-ui PUBLIC xenia-base)
  if(WIN32)
    target_link_libraries(xenia-ui PRIVATE dwmapi dxgi winmm)
@@ -90,6 +100,33 @@ index fc0d69f85..5ab9d4a8c 100644
    target_link_libraries(xenia-ui PRIVATE xcb X11 X11-xcb fontconfig ${GTK3_LIBRARIES})
  endif()
  xe_target_defaults(xenia-ui)
+diff --git a/src/xenia/ui/chimera_headless.cc b/src/xenia/ui/chimera_headless.cc
+new file mode 100644
+index 000000000..9b81a0f1b
+--- /dev/null
++++ b/src/xenia/ui/chimera_headless.cc
+@@ -0,0 +1,21 @@
++// chimera: what the window system's files define, for a build that has none.
++// Nothing here can show anything: each answers as a desktop would when the
++// user declines.
++#include "xenia/ui/file_picker.h"
++
++namespace xe {
++namespace ui {
++
++namespace {
++class NoFilePicker : public FilePicker {
++ public:
++  bool Show(Window* parent_window) override { return false; }
++};
++}  // namespace
++
++std::unique_ptr<FilePicker> FilePicker::Create() {
++  return std::make_unique<NoFilePicker>();
++}
++
++}  // namespace ui
++}  // namespace xe
 diff --git a/src/xenia/ui/imgui_drawer.cc b/src/xenia/ui/imgui_drawer.cc
 index d803160c7..5420bc405 100644
 --- a/src/xenia/ui/imgui_drawer.cc

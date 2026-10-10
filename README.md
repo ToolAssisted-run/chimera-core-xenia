@@ -8,3 +8,4 @@ what was found in the source, the route, and what has been done.
     git submodule update --init
     git -C extern/xenia submodule update --init --depth 1
     waterbox/build-native.sh
+    waterbox/build-ppc-tests.sh && waterbox/run-ppc-tests.sh

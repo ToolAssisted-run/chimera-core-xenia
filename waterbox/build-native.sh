@@ -49,10 +49,10 @@ if [ ! -x "$tools/bin/spirv-opt" ] || [ ! -x "$tools/bin/spirv-dis" ]; then
 	cp "$tools/spirv-tools/tools/spirv-opt" "$tools/spirv-tools/tools/spirv-dis" "$tools/bin/"
 fi
 
-if [ ! -f "$native/build.ninja" ]; then
-	CC="${CC:-clang-20}" CXX="${CXX:-clang++-20}" cmake -S "$xenia" -B "$native" -G Ninja \
-		-DCMAKE_BUILD_TYPE=Release -DCHIMERA_HEADLESS=ON > "$root/build/configure-native.log" 2>&1
-fi
+# XENIA_BUILD_TESTS brings upstream's instruction-test runner
+# (xenia-cpu-ppc-tests), which waterbox/run-ppc-tests.sh runs.
+CC="${CC:-clang-20}" CXX="${CXX:-clang++-20}" cmake -S "$xenia" -B "$native" -G Ninja \
+	-DCMAKE_BUILD_TYPE=Release -DCHIMERA_HEADLESS=ON -DXENIA_BUILD_TESTS=ON > "$root/build/configure-native.log" 2>&1
 
 # What xenia-build.py writes before a build: which commit this is. The date is
 # a word and not a date, so that two builds of one commit are one binary.
