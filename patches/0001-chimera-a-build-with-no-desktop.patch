@@ -1,5 +1,5 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 30febc4b7..32f901c5d 100644
+index 30febc4b7..3d4763331 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -36,6 +36,18 @@ message(STATUS "Target architecture: XE_TARGET_AARCH64=${XE_TARGET_AARCH64} XE_T
@@ -39,6 +39,19 @@ index 30febc4b7..32f901c5d 100644
  
      # Link groups for executables (resolves circular deps)
      set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--start-group")
+@@ -292,9 +308,12 @@ else()
+   add_compile_options($<$<CONFIG:Release>:-O3>)
+   # Link-time optimization (use lld and llvm-ar/ranlib to avoid system
+   # linker/archiver LTO plugin version mismatch with clang's bitcode)
++  # chimera: thin LTO and lld are clang's; a guest is built with GCC
++  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+   add_compile_options($<$<CONFIG:Release>:-flto=thin>)
+   add_link_options($<$<CONFIG:Release>:-flto=thin>)
+   add_link_options($<$<CONFIG:Release>:-fuse-ld=lld>)
++  endif()
+   find_program(LLVM_AR NAMES llvm-ar)
+   find_program(LLVM_RANLIB NAMES llvm-ranlib)
+   if(LLVM_AR)
 diff --git a/cmake/XeniaHelpers.cmake b/cmake/XeniaHelpers.cmake
 index b712553ca..aaff6ce0e 100644
 --- a/cmake/XeniaHelpers.cmake

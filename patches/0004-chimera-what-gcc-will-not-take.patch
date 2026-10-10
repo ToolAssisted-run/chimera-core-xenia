@@ -1,0 +1,71 @@
+diff --git a/src/xenia/base/cvar.h b/src/xenia/base/cvar.h
+index 8d2617409..a8a5e3428 100644
+--- a/src/xenia/base/cvar.h
++++ b/src/xenia/base/cvar.h
+@@ -59,7 +59,9 @@ class IConfigVar : virtual public ICommandVar {
+ template <class T>
+ class CommandVar : virtual public ICommandVar {
+  public:
+-  CommandVar<T>(const char* name, T* default_value, const char* description);
++  // chimera: named without its template arguments, as C++20 requires and GCC
++  // insists
++  CommandVar(const char* name, T* default_value, const char* description);
+   const std::string& name() const override;
+   const std::string& description() const override;
+   void AddToLaunchOptions(cxxopts::Options* options) override;
+@@ -83,7 +85,7 @@ class CommandVar : virtual public ICommandVar {
+ template <class T>
+ class ConfigVar : public CommandVar<T>, virtual public IConfigVar {
+  public:
+-  ConfigVar<T>(const char* name, T* default_value, const char* description,
++  ConfigVar(const char* name, T* default_value, const char* description,
+                const char* category, bool is_transient);
+   std::string config_value() const override;
+   const T& GetTypedConfigValue() const;
+diff --git a/src/xenia/base/memory.cc b/src/xenia/base/memory.cc
+index 7f135c0b8..ec0f97214 100644
+--- a/src/xenia/base/memory.cc
++++ b/src/xenia/base/memory.cc
+@@ -35,7 +35,9 @@ using xe::swcache::CacheLine;
+ #if XE_ARCH_AMD64
+ static constexpr unsigned NUM_CACHELINES_IN_PAGE = 4096 / sizeof(CacheLine);
+ 
+-#if defined(__clang__)
++// chimera: GCC too - its intrinsic may only be inlined into a function built
++// for the instruction, and this one is chosen at run time
++#if defined(__clang__) || defined(__GNUC__)
+ XE_FORCEINLINE
+ static void mvdir64b(void* to, const void* from) {
+   __asm__("movdir64b %1, %0" : : "r"(to), "m"(*(char*)from) : "memory");
+diff --git a/src/xenia/gpu/command_processor.h b/src/xenia/gpu/command_processor.h
+index dfe42737f..53807a8ad 100644
+--- a/src/xenia/gpu/command_processor.h
++++ b/src/xenia/gpu/command_processor.h
+@@ -20,6 +20,7 @@
+ #include <unordered_map>
+ #include <vector>
+ 
++#include "xenia/base/chimera_sync.h"
+ #include "xenia/base/math.h"
+ #include "xenia/base/ring_buffer.h"
+ #include "xenia/gpu/register_file.h"
+@@ -84,7 +85,7 @@ class Shader;
+ 
+ struct SwapState {
+   // Lock must be held when changing data in this structure.
+-  std::mutex mutex;
++  xe::sync::mutex mutex;
+   // Dimensions of the framebuffer textures. Should match window size.
+   uint32_t width = 0;
+   uint32_t height = 0;
+@@ -235,7 +236,9 @@ class CommandProcessor {
+   virtual void WriteRegistersFromMem(uint32_t start_index, uint32_t* base,
+                                      uint32_t num_registers);
+ 
+-  XE_FORCEINLINE
++#if defined(__clang__) || !defined(__GNUC__)  // chimera: GCC refuses to be forced
++  XE_FORCEINLINE          // to inline a function whose body it cannot see
++#endif
+   virtual void WriteRegisterRangeFromRing(xe::RingBuffer* ring, uint32_t base,
+                                           uint32_t num_registers);
+ 

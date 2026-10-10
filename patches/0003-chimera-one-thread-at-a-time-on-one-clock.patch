@@ -1763,27 +1763,6 @@ index 694c92b4e..eed8f7234 100644
      // Process instructions.
      const Instr* instr = block->instr_head;
      while (instr) {
-diff --git a/src/xenia/gpu/command_processor.h b/src/xenia/gpu/command_processor.h
-index dfe42737f..cc60f55ea 100644
---- a/src/xenia/gpu/command_processor.h
-+++ b/src/xenia/gpu/command_processor.h
-@@ -20,6 +20,7 @@
- #include <unordered_map>
- #include <vector>
- 
-+#include "xenia/base/chimera_sync.h"
- #include "xenia/base/math.h"
- #include "xenia/base/ring_buffer.h"
- #include "xenia/gpu/register_file.h"
-@@ -84,7 +85,7 @@ class Shader;
- 
- struct SwapState {
-   // Lock must be held when changing data in this structure.
--  std::mutex mutex;
-+  xe::sync::mutex mutex;
-   // Dimensions of the framebuffer textures. Should match window size.
-   uint32_t width = 0;
-   uint32_t height = 0;
 diff --git a/src/xenia/gpu/graphics_system.cc b/src/xenia/gpu/graphics_system.cc
 index f4f4a157d..ca0560fed 100644
 --- a/src/xenia/gpu/graphics_system.cc
@@ -2071,7 +2050,7 @@ index 15044536f..e748dfa46 100644
    // Shader and pipeline storage.
    uint32_t shader_storage_title_id_ = 0;
 diff --git a/src/xenia/kernel/kernel_state.h b/src/xenia/kernel/kernel_state.h
-index 6752e5675..b12e3e6ba 100644
+index 6752e5675..9e8bdb364 100644
 --- a/src/xenia/kernel/kernel_state.h
 +++ b/src/xenia/kernel/kernel_state.h
 @@ -16,6 +16,7 @@
@@ -2082,7 +2061,31 @@ index 6752e5675..b12e3e6ba 100644
  #include "xenia/base/bit_map.h"
  #include "xenia/cpu/backend/backend.h"
  #include "xenia/cpu/export_resolver.h"
-@@ -379,7 +380,7 @@ class KernelState {
+@@ -143,16 +144,13 @@ struct DPCImpersonationScope {
+ };
+ 
+ struct KernelVersion {
+-  union {
+-    xe::be<uint64_t> value;
+-
+-    struct {
+-      xe::be<uint16_t> major;
+-      xe::be<uint16_t> minor;
+-      xe::be<uint16_t> build;
+-      xe::be<uint16_t> qfe;
+-    };
+-  };
++  // chimera: the four fields without the union that overlaid them with one
++  // 64-bit value nobody read. A member with a constructor may not sit in an
++  // anonymous struct, and GCC says so.
++  xe::be<uint16_t> major;
++  xe::be<uint16_t> minor;
++  xe::be<uint16_t> build;
++  xe::be<uint16_t> qfe;
+ 
+   KernelVersion(uint16_t build_ver = kBaseKernelBuildVersion) {
+     major = 2;
+@@ -379,7 +377,7 @@ class KernelState {
    object_ref<XHostThread> dispatch_thread_;
    // Must be guarded by the global critical region.
    util::NativeList dpc_list_;

@@ -227,6 +227,30 @@ null renderer and this stretch of the game do not use them: the Vulkan
 pipeline compilers, the audio media player's worker, and FFmpeg's own.
 Priorities and affinities are recorded and ignored.
 
+## GCC (2026-10-10)
+
+A guest is built with miniBox's toolchain, which is GCC 13 over musl; Canary
+names clang, and says GCC "should work in theory". Measured, natively, before
+any of the sandbox is involved: three things stop it, and patch 0004 and a
+line of 0001 deal with them.
+
+- Thin LTO and lld are asked for by name whatever the compiler is (now only
+  for clang).
+- Two constructors declared with their template arguments
+  (`ConfigVar<T>(...)`), which C++20 does not allow and GCC refuses - in
+  `cvar.h`, so in 223 files. And a struct with constructors in an anonymous
+  struct in a union (`KernelVersion`): the union overlaid four fields with
+  one value nobody read, and is gone.
+- Two forced inlines GCC cannot do: an intrinsic chosen at run time, and a
+  virtual function whose body is elsewhere.
+
+With those it builds, and the emulator GCC built runs the game to the same
+digest as the one clang built - 257,171, 437, ed611adef65dbf20. That was not
+a given: everything outside the recompiler is the compiler's arithmetic.
+
+`waterbox/make-patches.sh` writes `patches/` from the tree, by path, so that
+the series is always what the tree is.
+
 ## The recompiler's own tests (2026-10-10)
 
 Upstream has 570 files of PowerPC instruction tests
@@ -271,9 +295,9 @@ but a processor of 2013 or later), or measuring first; he chose "Require
 AVX2 + FMA". The driver sets `x64_extension_mask` to those two bits and
 refuses a host that lacks either; `run-ppc-tests.sh` runs upstream's tests
 with the same mask, and that result is the reference from here on: 142,097
-pass and 28,320 fail (the names' SHA-256 begins d1195e69efa280d0), which differs from
-the every-feature run above in 0 tests failing only now and 0 only
-then.
+pass and 28,320 fail (the names' SHA-256 begins d1195e69efa280d0) - the
+every-feature run's set exactly. Of what this machine has, AVX2 and FMA are
+the only features that change a result; the rest only change the code.
 
 ## What is the owner's
 
