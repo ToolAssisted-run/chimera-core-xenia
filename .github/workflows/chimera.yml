@@ -63,11 +63,13 @@ jobs:
           submodules: recursive
 
       - name: Install build dependencies
-        # gcc-13 is for the PowerPC assembler the instruction tests are built
-        # with (binutils 2.24, which newer compilers refuse).
+        # The lib*-dev packages are what Chimera's own build needs; this core
+        # needs none of them. gcc-13 is for the PowerPC assembler the
+        # instruction tests are built with (binutils 2.24, which newer
+        # compilers refuse).
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends meson ninja-build build-essential cmake pkg-config python3 curl flex bison texinfo mono-complete gcc-13 gcc-14 g++-14
+          sudo apt-get install -y --no-install-recommends meson ninja-build build-essential cmake pkg-config python3 curl flex bison texinfo mono-complete gcc-13 gcc-14 g++-14 libgl1-mesa-dev libegl-dev libx11-dev libxext-dev libasound2-dev
 
       - name: Use GCC 14
         # The native reference and the sandboxed core must come from the same

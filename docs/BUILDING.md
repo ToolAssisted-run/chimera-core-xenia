@@ -25,6 +25,10 @@ sudo apt-get install -y --no-install-recommends meson ninja-build \
   gcc-13 gcc-14 g++-14 mono-complete
 ```
 
+Chimera's own build needs a few more (its README lists them):
+`libgl1-mesa-dev libegl-dev libx11-dev libxext-dev libasound2-dev`. This core
+links none of them.
+
 For the tests that draw, a Vulkan driver. Mesa's software one will do:
 `sudo apt-get install -y mesa-vulkan-drivers libvulkan1`.
 
