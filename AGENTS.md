@@ -96,5 +96,5 @@ is stamped `<commit>+local` and is for testing only.
 
 docs/PLAN.md lists it. The main points: only one game has been tried; the
 game runs at a third to a half of real time; a save cannot be put in before
-the game starts; Chimera's window (as opposed to its headless runner) has
-not been run with this core.
+the game starts; Chimera's window has run this core only when driven by a
+script, with nobody at it.

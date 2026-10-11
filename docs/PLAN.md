@@ -27,8 +27,8 @@ Where it stands (2026-10-11). One game has been tried, Mirror's Edge.
   a save in.
 - It is slow: at the default CPU Speed the game runs at about a third to a
   half of real time. "Speed" below says why.
-- Chimera's window has not been run with this core, only the headless
-  runner. No second game has been tried.
+- Chimera's window has run it only when driven by a script, with nobody at
+  it ("Published" below). No second game has been tried.
 
 The Vulkan bridge is in miniBox's `main` (33acd30) and Chimera's engine uses
 it from `main` (8fd6114). This repository is public and CI publishes the
@@ -953,8 +953,9 @@ at the fastest speed (4000, which is 250 ps an instruction) and says so. At
 the default the game shows nothing for three seconds, and the tests that
 compare pictures would be comparing blank ones, which they refuse. One new
 test, `speed:default`, checks that a run that names no speed is the run at
-500 and is not the run at 4000. That makes 15 tests with `CHIMERA_ROOT` set,
-about seven minutes.
+500 and is not the run at 4000. With `frontend:pads`, added the same day
+("Published" below), that makes 16 tests with `CHIMERA_ROOT` set, about
+seven minutes.
 
 Not controlled: the sandbox leg against a sandbox that is subtly another
 machine. What stands in for it is that it did fail, for real, three times
@@ -1036,6 +1037,33 @@ types properly. The workflow fails if the instruction tests did not run,
 so that a run that skipped everything cannot pass. The tests with the game
 are run on the developer's machine before a push, and the commit says what
 they printed.
+
+What happened when it was published, 2026-10-11:
+
+- A build from a fresh clone in another folder, tested with the game, gave
+  the results of the developer's own tree: 15 tests passed, none failed,
+  none skipped, with the same time, thread switches, sound and memory at
+  frame 300. So the folder a package is built in does not change how a game
+  runs, although the two core files are not the same bytes.
+- The first CI run failed before it reached this repository's code:
+  Chimera's own Linux build needs five system libraries (EGL among them)
+  that the workflow did not install. A local fresh clone could not show
+  that, because it was built beside a Chimera that was already built.
+- The second run passed in 64 minutes: on the runner 1 test passed and 14
+  were skipped for want of a game, Chimera's package checks passed 17 of
+  17, and the release "Development build 494a351c" was published.
+- Chimera's window was run with the package on Windows on the GeForce GTX
+  1060, driven by a script (`Chimera.exe --headless` with a Lua script):
+  it started the game through the bridge, ran 420 frames, took screenshots,
+  saved the project, and opened the saved project again.
+- That run showed a defect: the input log had columns for all four
+  controllers with one plugged in. Fixed the same day: the core now tells
+  Chimera which controllers are plugged in (the optional exports
+  `IsButtonActive` and `IsAxisActive`), and a movie has columns for those
+  only. A movie recorded before that fix has four controllers' columns and
+  does not match. The test `frontend:pads` checks it; before the fix a
+  recorded row had four controllers' columns whatever the setting, which
+  is what the test refuses.
 
 The licence list (`waterbox/package-licenses.json`) was checked against
 what is actually linked into the core. Three entries were for libraries

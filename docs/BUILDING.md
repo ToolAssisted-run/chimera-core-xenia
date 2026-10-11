@@ -99,7 +99,8 @@ in the sandbox, compared with the native result). With it:
 - a run that names no CPU speed is the run at the default, 500;
 - with `CHIMERA_ROOT` set, the package in Chimera's headless runner
   (`chimera-run`): the picture, the picture with savestates, the refusal to
-  start with no graphics card, and the save data export.
+  start with no graphics card, the save data export, and that a movie has
+  columns only for the controllers that are plugged in.
 
 The tests that draw are skipped on a machine with no Vulkan driver.
 

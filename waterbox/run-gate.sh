@@ -235,11 +235,13 @@ if [ -z "$chimera_root" ] || [ ! -x "$engine" ] || [ ! -f "$package" ]; then
 	report "frontend:states" SKIP "$why"
 	report "frontend:no-card" SKIP "$why"
 	report "frontend:savedata" SKIP "$why"
+	report "frontend:pads" SKIP "$why"
 elif [ "$have_sandbox" = 0 ]; then
 	report "frontend:picture" SKIP "$why_sandbox"
 	report "frontend:states" SKIP "$why_sandbox"
 	report "frontend:no-card" SKIP "$why_sandbox"
 	report "frontend:savedata" SKIP "$why_sandbox"
+	report "frontend:pads" SKIP "$why_sandbox"
 else
 	# A picture that is blank is refused, whatever it is compared with, so
 	# these runs use the fastest CPU Speed too (the game shows its first
@@ -289,6 +291,21 @@ else
 		report "frontend:savedata" PASS "the engine's save data export brings out $kept files of the console's storage, the signed-in profile's account among them ($(wc -c < "$account") bytes)"
 	else
 		report "frontend:savedata" FAIL "$kept files exported; $(grep '^savedata=' "$work/fe-null.out" | head -1); the profile's account $( [ -s "$account" ] && echo is || echo is not ) there"
+	fi
+	# The package declares four controllers, and the console says which are
+	# plugged in: a movie has columns for those and no others. A row of a
+	# recorded movie is "||" and then one group ending in "|" for each
+	# controller, so the bars are counted: 3 with one controller, 4 with two.
+	bars() { # <how many controllers>: the bars in a recorded row
+		env -u DISPLAY "$engine" "$package" "$game" "$work/empty.movie" --frames 3 --record "$work/pads$1.movie" \
+			--settings "{\"renderer\":\"null\",\"cpu_speed\":\"4000\",\"pads\":\"$1\"}" > "$work/pads$1.out" 2>&1
+		head -1 "$work/pads$1.movie" 2> /dev/null | tr -cd '|' | wc -c
+	}
+	one="$(bars 1)"; two="$(bars 2)"; four="$(bars 4)"
+	if [ "$one" = 3 ] && [ "$two" = 4 ] && [ "$four" = 6 ]; then
+		report "frontend:pads" PASS "a recorded movie has one controller's columns with one plugged in, two with two, four with four"
+	else
+		report "frontend:pads" FAIL "bars in a row: $one with one controller (3 expected), $two with two (4), $four with four (6)"
 	fi
 fi
 

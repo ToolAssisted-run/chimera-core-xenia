@@ -33,6 +33,8 @@ namespace {
 constexpr int SCREEN_W = 1280, SCREEN_H = 720;
 
 std::string g_error;
+// how many controllers are plugged in (the "pads" setting), from the first port
+int g_pads = 1;
 #ifdef CHIMERA_GUEST
 bool g_bridge = false;
 #else
@@ -174,6 +176,7 @@ CORE_EXPORT int Init(void) {
       return 0;
     }
   }
+  g_pads = options.pads;
   options.log = json_string(settings, "log") == "1";
   options.trace_schedule = json_string(settings, "trace_schedule") == "1";
   options.instruction_ps = std::atoll(json_string(settings, "instruction_ps").c_str());
@@ -215,6 +218,14 @@ CORE_EXPORT void FrameAdvance(uint64_t buttons) {
     chimera_xenia::set_pad(port, word, g_axes + port * chimera_xenia::AXES_PER_PORT);
   }
   chimera_xenia::frame();
+}
+
+// Which of the declared controls this console has. The package declares four
+// controllers; one that is not plugged in gets no column in the input log.
+// Fifteen buttons and AXES_PER_PORT axes a controller, in declared order.
+CORE_EXPORT int IsButtonActive(int32_t index) { return index >= 0 && index / 15 < g_pads ? 1 : 0; }
+CORE_EXPORT int IsAxisActive(int32_t index) {
+  return index >= 0 && index / chimera_xenia::AXES_PER_PORT < g_pads ? 1 : 0;
 }
 
 CORE_EXPORT uint32_t* GetVideoBgra(void) {
