@@ -25,13 +25,18 @@ report() { # <leg> <PASS|FAIL|SKIP> <what>
 }
 # what a run ended with, without the word that says how it got there
 last() { tail -1 "$1" 2> /dev/null | cut -d' ' -f2-; }
+# Every run below uses the fastest CPU Speed (4000 million instructions a
+# second, 250 ps an instruction) unless it says otherwise: at the default
+# (500) the game shows nothing for its first three seconds, and these tests
+# compare pictures. XENIA_GATE_COST is the cost for one run.
+cost_fast=250
 native() { # <name> <options...>: a native run, its lines in $work/<name>.out
 	name="$1"; shift
-	"$run" "$game" "$work/$name-work" "$@" > "$work/$name.out" 2> "$work/$name.err"
+	"$run" "$game" "$work/$name-work" --instruction-ps "${XENIA_GATE_COST:-$cost_fast}" "$@" > "$work/$name.out" 2> "$work/$name.err"
 }
 sandbox() { # <name> <options...>
 	name="$1"; shift
-	"$wbx/run-wbx" "$wbx/core.wbx" "$game" "$@" > "$work/$name.out" 2> "$work/$name.err"
+	"$wbx/run-wbx" "$wbx/core.wbx" "$game" --instruction-ps "${XENIA_GATE_COST:-$cost_fast}" "$@" > "$work/$name.out" 2> "$work/$name.err"
 }
 
 game="${XENIA_TEST_GAME:-$root/tests/roms/Mirrors Edge [NTSCU][NTSCJ].iso}"
@@ -58,10 +63,10 @@ if [ "$have_native" = 0 ]; then
 else
 	native a --frames "$frames" --every 60
 	native b --frames "$frames" --every 60
-	CHIMERA_INSTRUCTION_PS=1040 native c --frames "$frames" --every 60
+	XENIA_GATE_COST=260 native c --frames "$frames" --every 60
 	if [ -s "$work/a.out" ] && cmp -s "$work/a.out" "$work/b.out" && ! cmp -s "$work/a.out" "$work/c.out" &&
 		grep -q "^end frame=$frames " "$work/a.out" && ! grep -q "audioPairs=0 " "$work/a.out"; then
-		report "game:repeats" PASS "$frames frames, twice: $(last "$work/a.out") - and another run when an instruction costs 1040 ps instead of 1000"
+		report "game:repeats" PASS "$frames frames, twice: $(last "$work/a.out") - and another run when an instruction costs 260 ps instead of 250"
 	else
 		report "game:repeats" FAIL "first [$(last "$work/a.out")] second [$(last "$work/b.out")] with another instruction cost [$(last "$work/c.out")] $(tail -1 "$work/a.err")"
 	fi
@@ -178,9 +183,8 @@ fi
 #  - a state saved by one process and carried on by another.
 # All three against the native Vulkan run above, pictures included, at every
 # twentieth frame of a shorter run (a load with this renderer takes two
-# thirds of a second) - 200 frames, because the program shows nothing in its
-# first 80 and a run of blank pictures proves nothing (it is refused).
-short="${XENIA_GATE_SHORT_FRAMES:-200}"
+# thirds of a second). A run of blank pictures proves nothing and is refused.
+short="${XENIA_GATE_SHORT_FRAMES:-120}"
 if [ "$have_native" = 0 ] || [ "$have_sandbox" = 0 ] || [ ! -s "$work/v.out" ]; then
 	why="$why_native"; [ "$have_native" = 1 ] && why="$why_sandbox"
 	[ "$have_native" = 1 ] && [ "$have_sandbox" = 1 ] && why="no Vulkan run to hold it to (picture:bridge did not run)"
@@ -237,13 +241,15 @@ elif [ "$have_sandbox" = 0 ]; then
 	report "frontend:no-card" SKIP "$why_sandbox"
 	report "frontend:savedata" SKIP "$why_sandbox"
 else
-	# far enough in for the program to be showing something: a picture that
-	# is blank is refused, whatever it is compared with
-	fe_frames=200
-	shot=180
+	# A picture that is blank is refused, whatever it is compared with, so
+	# these runs use the fastest CPU Speed too (the game shows its first
+	# picture sooner).
+	fe_frames=100
+	shot=80
+	fast='{"cpu_speed":"4000"}'
 	: > "$work/empty.movie"
-	env -u DISPLAY "$engine" "$package" "$game" "$work/empty.movie" --frames "$fe_frames" --record "$work/fe.movie" --gpu > "$work/fe-record.out" 2>&1
-	env -u DISPLAY "$engine" "$package" "$game" "$work/fe.movie" --gpu --screenshot "$shot=$work/fe.tga" > "$work/fe-play.out" 2>&1
+	env -u DISPLAY "$engine" "$package" "$game" "$work/empty.movie" --frames "$fe_frames" --record "$work/fe.movie" --gpu --settings "$fast" > "$work/fe-record.out" 2>&1
+	env -u DISPLAY "$engine" "$package" "$game" "$work/fe.movie" --gpu --settings "$fast" --screenshot "$shot=$work/fe.tga" > "$work/fe-play.out" 2>&1
 	played=$?
 	if grep -q "no Vulkan on this machine" "$work/fe-play.out"; then
 		report "frontend:picture" SKIP "no Vulkan on this machine"
@@ -257,7 +263,7 @@ else
 		else
 			report "frontend:picture" FAIL "chimera-run exit $played; pictures: $verdict; $(tail -1 "$work/fe-play.out")"
 		fi
-		env -u DISPLAY "$engine" "$package" "$game" "$work/fe.movie" --gpu --rerecord --screenshot "$shot=$work/fe-states.tga" > "$work/fe-states.out" 2>&1
+		env -u DISPLAY "$engine" "$package" "$game" "$work/fe.movie" --gpu --settings "$fast" --rerecord --screenshot "$shot=$work/fe-states.tga" > "$work/fe-states.out" 2>&1
 		stated=$?
 		verdict="$(python3 "$same" "$work/fe-states.tga" "$work/fe.tga" 2>&1)"; same_rc=$?
 		if [ "$stated" = 0 ] && grep -q "^frames=$fe_frames" "$work/fe-states.out" && [ "$same_rc" = 0 ]; then
@@ -266,9 +272,9 @@ else
 			report "frontend:states" FAIL "chimera-run --rerecord exit $stated; pictures: $verdict; $(tail -1 "$work/fe-states.out")"
 		fi
 	fi
-	env -u DISPLAY "$engine" "$package" "$game" "$work/fe.movie" > "$work/fe-nocard.out" 2>&1
+	env -u DISPLAY "$engine" "$package" "$game" "$work/fe.movie" --settings "$fast" > "$work/fe-nocard.out" 2>&1
 	refused=$?
-	env -u DISPLAY "$engine" "$package" "$game" "$work/fe.movie" --settings '{"renderer":"null"}' --export-savedata "$work/fe-saved" > "$work/fe-null.out" 2>&1
+	env -u DISPLAY "$engine" "$package" "$game" "$work/fe.movie" --settings '{"renderer":"null","cpu_speed":"4000"}' --export-savedata "$work/fe-saved" > "$work/fe-null.out" 2>&1
 	ran=$?
 	if [ "$refused" != 0 ] && grep -q "the Vulkan renderer needs a device" "$work/fe-nocard.out" && [ "$ran" = 0 ] && grep -q "^frames=$fe_frames" "$work/fe-null.out"; then
 		report "frontend:no-card" PASS "with no card handed over the package refuses to start and says why (exit $refused); with the renderer that draws nothing it runs its $fe_frames frames"
@@ -283,6 +289,23 @@ else
 		report "frontend:savedata" PASS "the engine's save data export brings out $kept files of the console's storage, the signed-in profile's account among them ($(wc -c < "$account") bytes)"
 	else
 		report "frontend:savedata" FAIL "$kept files exported; $(grep '^savedata=' "$work/fe-null.out" | head -1); the profile's account $( [ -s "$account" ] && echo is || echo is not ) there"
+	fi
+fi
+
+# The default CPU Speed is 500 million instructions a second: a run that
+# names no speed is the run at 2000 ps an instruction, and is not the run at
+# 250. (The runner's own default; the package's default is checked by the
+# contract tests against waterbox.config.)
+if [ "$have_native" = 0 ]; then
+	report "speed:default" SKIP "$why_native"
+else
+	"$run" "$game" "$work/d0-work" --frames 120 > "$work/d0.out" 2> "$work/d0.err"
+	XENIA_GATE_COST=2000 native d1 --frames 120
+	native d2 --frames 120
+	if [ -s "$work/d0.out" ] && cmp -s "$work/d0.out" "$work/d1.out" && ! cmp -s "$work/d0.out" "$work/d2.out"; then
+		report "speed:default" PASS "a run that names no CPU speed is the run at 2000 ps an instruction (500 million a second), and not the run at 250"
+	else
+		report "speed:default" FAIL "no speed named [$(last "$work/d0.out")] 2000 ps [$(last "$work/d1.out")] 250 ps [$(last "$work/d2.out")]"
 	fi
 fi
 

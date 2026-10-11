@@ -20,6 +20,18 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-Note: this licence covers the integration this repository adds: the waterbox/
-driver and scripts. The patches/ directory modifies Xenia Canary and is offered
-under its terms (BSD-3-Clause, extern/xenia/LICENSE).
+Note: this licence covers what this repository adds: the driver, the scripts
+and the documents under waterbox/, docs/ and .github/. waterbox/driver/memfs.cc
+and memfs.h come from chimera-core-vita3k, by the same author under the same
+licence.
+
+The patches/ directory changes Xenia Canary
+(https://github.com/xenia-canary/xenia-canary) and is offered under Xenia's
+terms, BSD-3-Clause (extern/xenia/LICENSE).
+
+The built package, xenia.chimeraCore, contains Xenia Canary and the
+libraries it links. Two of them are LGPL-2.1: Xenia's fork of FFmpeg and
+libmspack's LZX decoder. The rest are permissive or public domain.
+waterbox/package-licenses.json names every component, its licence and its
+exact source, and the package carries the licence texts. The package
+contains no game, no system software and no key.

@@ -10,19 +10,30 @@ Vulkan bridge for Chimera is something I wanted us to do anyway."
 "A fair try" is taken to mean what it says: this may not work, and where it
 does not this file will say so.
 
-Where it stands (2026-10-10): the owner's one game runs in the sandbox, a
-frame at a time, to the same memory, sound and schedule as the native build,
-draws through miniBox's Vulkan bridge the pictures the native build draws,
-and loads a state with that renderer - on a new device, in another process -
-to the picture it would have had. As a package it runs in the frontend's
-headless runner, on Linux on a software Vulkan and on Windows on a GeForce
-GTX 1060, where the one game there is goes from its title screen through
-its menus to "New Game", driven by a movie. It has a profile that is always
-signed in and storage in the machine's own memory, which the frontend can export. On the card the title
-screen runs at a third of real time at the default CPU speed (a setting:
-the game never waits, so the machine's clock is what the host pays for).
-Nothing is published, and the frontend's half is a branch. This file is the survey,
-the route, and what each step measured.
+Where it stands (2026-10-11). One game has been tried, Mirror's Edge.
+
+- It runs in Chimera's sandbox one frame at a time, and gives the same
+  memory, sound and timing as the native build at every checked frame.
+- The picture is drawn through miniBox's Vulkan bridge and is the picture
+  the native build draws.
+- A savestate can be loaded with that renderer, in the same process or in
+  another one, and the picture afterwards is the one the run would have had.
+- As a package it runs in Chimera's headless runner (`chimera-run`): on
+  Linux on a software Vulkan driver, and on Windows on a GeForce GTX 1060.
+  There a movie takes the game from its title screen through the menus,
+  "New Game" and the opening into the first level.
+- The console has a profile that is always signed in, and its storage is
+  kept in memory. Chimera can export what the game saved; it cannot yet put
+  a save in.
+- It is slow: at the default CPU Speed the game runs at about a third to a
+  half of real time. "Speed" below says why.
+- Chimera's window has not been run with this core, only the headless
+  runner. No second game has been tried.
+
+The Vulkan bridge is in miniBox's `main` (33acd30) and Chimera's engine uses
+it from `main` (8fd6114). This repository is public and CI publishes the
+package ("Published" below). The rest of this file is the survey, the route,
+and what each step measured.
 
 ## The pin
 
@@ -861,16 +872,29 @@ Three things follow.
   seconds at the title: 2.07 million calls, 2.2 s in the host half and the
   driver together.
 
-So the rate of the clock is a setting of the core, **CPU Speed**: the
-millions of instructions the console's processor runs in a second, all six
-threads together - 500, 1000 (the default), 2000 or 4000. It is part of the
-machine: a movie made at one does not play at another. The scheduler's own
-default moved from 250 ps to 1000 with it. At the default, on the card:
-fifty seconds from power on to the title screen in 149; ninety seconds
-through the menus, the loading and the game's animated opening in 226 -
-two and a half host seconds for one of the machine's, where it was ten to
-twelve - and for those ninety seconds the bridge counts 1.93 million calls
-and 2.7 s in itself and the driver.
+So how fast the console's processor runs is a setting of the core, **CPU
+Speed**: how many million instructions the processor runs in a second, all
+six of its threads together. The choices are 500, 1000, 2000 and 4000. A
+movie made at one speed does not play back at another, because the game
+does a different amount of work in each frame.
+
+The default is 500 (user-decided, 2026-10-11): "Set 500 as default. But say
+in the description that 2000 is closer to actual console performance and
+500 is chosen for better TASing experience". The setting's description in
+`waterbox/waterbox.config` says both. It was 1000 for one day before that.
+
+What was measured at each speed, on the GTX 1060 unless said otherwise:
+
+- 1000: fifty seconds of the game, from power-on to the title screen, take
+  149 seconds. Ninety seconds, through the menus, the loading screen and
+  the animated opening, take 226: two and a half seconds for each second of
+  the game, where the first runs took ten to twelve. In those ninety
+  seconds the bridge counted 1.93 million Vulkan calls, which cost 2.7
+  seconds in the bridge and the driver together.
+- 500: natively with nothing drawn, 70 seconds of the game take 76 (the
+  table above). The game starts later at this speed: the picture is blank
+  for the first 180 frames, the first logo stands still from frame 200 to
+  280, and the game first asks for the controller around frame 290.
 
 What this is not: a model of the console. One clock for six hardware
 threads is one processor shared, where the console has three cores; a
@@ -918,6 +942,19 @@ Each leg has been seen to fail, by hand, once:
   fail, the reference says 1038", and the test is named;
 - a part of the instruction tests in which nothing fails is refused, which
   the first choice of part (every twentieth file) was.
+
+- the default speed (added 2026-10-11, the test `speed:default`): a run
+  that names no speed against a run at 1000 instead of 500, by hand - the
+  two differ after 120 frames (22,906 thread switches against 11,959), so
+  the test would say FAIL if the default moved.
+
+Changed on 2026-10-11, with the default speed. Every test now runs the game
+at the fastest speed (4000, which is 250 ps an instruction) and says so. At
+the default the game shows nothing for three seconds, and the tests that
+compare pictures would be comparing blank ones, which they refuse. One new
+test, `speed:default`, checks that a run that names no speed is the run at
+500 and is not the run at 4000. That makes 15 tests with `CHIMERA_ROOT` set,
+about seven minutes.
 
 Not controlled: the sandbox leg against a sandbox that is subtly another
 machine. What stands in for it is that it did fail, for real, three times
@@ -978,5 +1015,30 @@ the only features that change a result; the rest only change the code.
   the repository (`tests/roms`, ignored). Every game leg of the gate needs
   it and is skipped without it; what is proved is proved on that one game's
   first thirty seconds.
-- **The repository.** Local only. A public repository is the owner's to ask
-  for.
+- **The repository.** Public since 2026-10-11, at the owner's word ("Create
+  a public repo"): `ToolAssisted-run/chimera-core-xenia`.
+- **The list of official cores.** Chimera's `official-cores.json` and the
+  README's table do not name this core. Adding it is the owner's decision
+  and has not been asked for.
+
+## Published (user-decided, 2026-10-11)
+
+Three decisions of the owner's, the same day: merge the Vulkan bridge into
+miniBox's and Chimera's `main`, make this repository public, and make 500
+the default CPU Speed.
+
+What CI proves and what it does not. A public runner may not have an Xbox
+360 game, so on a runner every test that runs a game is skipped. What runs
+there: the whole build from a fresh clone, Xenia's instruction tests in the
+sandbox compared with the native build's results, and Chimera's own checks
+that the package loads and declares its controllers, settings and file
+types properly. The workflow fails if the instruction tests did not run,
+so that a run that skipped everything cannot pass. The tests with the game
+are run on the developer's machine before a push, and the commit says what
+they printed.
+
+The licence list (`waterbox/package-licenses.json`) was checked against
+what is actually linked into the core. Three entries were for libraries
+that are not linked (snappy, RapidJSON, the DXBC checksum) and were
+removed; three that are linked were missing and were added (cxxopts, and
+Xenia's copies of a DES and a SHA-256 implementation). 27 components.

@@ -2,7 +2,7 @@
  "package": "xenia",
  "effectiveTerms": "BSD-3-Clause, with LGPL-2.1 parts (FFmpeg, libmspack)",
  "commercialUse": "allowed, on the BSD and LGPL terms",
- "note": "The built core combines this repository's integration (MIT) with Xenia Canary, which is BSD-3-Clause, and the libraries it links. Two of them are LGPL: Xenia's fork of FFmpeg (for the console's XMA and WMA sound) and libmspack's LZX decoder; both are linked statically, and the exact source of each is named here so that the core can be built again with either replaced. Everything else is permissive or public domain. The package carries no game, no system software and no key: Xenia stands in for the console's system software.",
+ "note": "The built core combines this repository's integration (MIT) with Xenia Canary, which is BSD-3-Clause, and the libraries it links. Two of them are LGPL: Xenia's fork of FFmpeg (for the console's XMA and WMA sound; Xenia configures it as LGPL version 2.1 or later) and libmspack's LZX decoder; both are linked statically, and the exact source of each is named here so that the core can be built again with either replaced. Everything else is permissive or public domain. Checked against the linked core on 2026-10-11: a library Xenia carries but this core does not link (snappy, RapidJSON, the DXBC checksum, Discord RPC, SDL) is not listed. The package carries no game, no system software and no key: Xenia stands in for the console's system software.",
  "components": [
   {
    "name": "chimera-core-xenia (integration)",
@@ -83,13 +83,6 @@
    "url": "https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator"
   },
   {
-   "name": "snappy",
-   "license": "BSD-3-Clause",
-   "commit": "{submodule:extern/xenia/third_party/snappy}",
-   "file": "extern/xenia/third_party/snappy/COPYING",
-   "url": "https://github.com/google/snappy"
-  },
-  {
    "name": "xxHash",
    "license": "BSD-2-Clause",
    "commit": "{submodule:extern/xenia/third_party/xxhash}",
@@ -146,13 +139,6 @@
    "url": "https://github.com/nemtrif/utfcpp"
   },
   {
-   "name": "RapidJSON",
-   "license": "MIT",
-   "commit": "{submodule:extern/xenia/third_party/rapidjson}",
-   "file": "extern/xenia/third_party/rapidjson/license.txt",
-   "url": "https://github.com/Tencent/rapidjson"
-  },
-  {
    "name": "disruptorplus",
    "license": "MIT",
    "commit": "{submodule:extern/xenia/third_party/disruptorplus}",
@@ -182,9 +168,21 @@
    "file": "extern/xenia/third_party/crypto/rijndael-alg-fst.c"
   },
   {
-   "name": "DXBC checksum",
-   "license": "MIT (Advanced Micro Devices), as its source says",
-   "file": "extern/xenia/third_party/dxbc/DXBCChecksum.cpp"
+   "name": "cxxopts",
+   "license": "MIT",
+   "url": "https://github.com/jarro2783/cxxopts",
+   "commit": "{submodule:extern/xenia/third_party/cxxopts}",
+   "file": "extern/xenia/third_party/cxxopts/LICENSE"
+  },
+  {
+   "name": "DES (third_party/crypto/des)",
+   "license": "MIT",
+   "file": "extern/xenia/third_party/crypto/des/LICENSE"
+  },
+  {
+   "name": "SHA-256 (Stephan Brumme)",
+   "license": "Zlib, as its source says",
+   "file": "extern/xenia/third_party/crypto/sha256.cpp"
   }
  ]
 }

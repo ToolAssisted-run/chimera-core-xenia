@@ -751,7 +751,7 @@ index a0cae20e2..029311833 100644
  
 diff --git a/src/xenia/base/threading_chimera.cc b/src/xenia/base/threading_chimera.cc
 new file mode 100644
-index 000000000..22f238dd4
+index 000000000..45397cad3
 --- /dev/null
 +++ b/src/xenia/base/threading_chimera.cc
 @@ -0,0 +1,1002 @@
@@ -870,7 +870,7 @@ index 000000000..22f238dd4
 +// What a guest instruction costs, in picoseconds. One number for the whole
 +// machine: every thread's instructions move the one clock, so this is the
 +// reciprocal of everything the console's six hardware threads do in a
-+// second - a thousand million instructions, unless the core says otherwise
++// second - five hundred million instructions, unless the core says otherwise
 +// (SetCosts; its CPU Speed setting). It is also what the host has to execute
 +// for every second of the machine's time when a program never waits, and a
 +// program that spins between frames never does. CHIMERA_INSTRUCTION_PS
@@ -884,9 +884,9 @@ index 000000000..22f238dd4
 +  static int64_t value = 0;
 +  if (!value) {
 +    const char* text = std::getenv("CHIMERA_INSTRUCTION_PS");
-+    value = text && *text ? std::strtoll(text, nullptr, 10) : 1000;
++    value = text && *text ? std::strtoll(text, nullptr, 10) : 2000;
 +    if (value <= 0) {
-+      value = 1000;
++      value = 2000;
 +    }
 +  }
 +  return value;
