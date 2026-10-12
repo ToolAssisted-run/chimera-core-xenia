@@ -209,8 +209,9 @@ CORE_EXPORT int Init(void) {
   }
   options.arcade_bought = arcade != "trial";
   if (options.renderer == "vulkan" && !g_bridge) {
-    g_error = "the Vulkan renderer needs a device, and none was handed over (this machine may have no Vulkan, or "
-              "this frontend no Vulkan bridge)";
+    g_error = "the Vulkan renderer needs a device, and none was handed over. Either this machine has no Vulkan, or "
+              "this Chimera is older than this core: its Vulkan bridge has fewer commands than the core was built "
+              "with, and a newer Chimera is needed";
     return 0;
   }
   return chimera_xenia::boot(name, options, g_error) ? 1 : 0;
