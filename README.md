@@ -19,11 +19,19 @@ savestates. Nothing else has been tested.
 - What a game saves can be exported from Chimera, but a save cannot be put
   in before the game starts yet.
 - The host processor must have AVX2 and FMA.
+- A game that tells the console to end it, or to start another program,
+  stops there: the picture stays and nothing more happens. The core runs
+  one program.
 
 ## What you bring
 
-A disc image (`.iso`) of a game you own. The console's own system software
-is not needed. Xenia Canary's
+A disc image (`.iso`) of a game you own, or an Xbox Live Arcade game: one
+file with no extension and a long name of letters and digits, as it sits in
+a console's storage under `Content/0000000000000000/<title>/000D0000`. In
+Chimera's New Project window choose "All files" to see such a file. No
+Arcade game has been tried yet (see Status), and Games on Demand, which are
+a small file beside a folder of data files, are not supported. The console's
+own system software is not needed. Xenia Canary's
 [compatibility list](https://github.com/xenia-canary/game-compatibility)
 says which games work in Xenia itself.
 
@@ -36,6 +44,9 @@ says which games work in Xenia itself.
   in a second. 2000 is the closest to a real console. 500 is the default
   because it runs faster on your computer, which matters when making a TAS.
   A movie made at one speed does not play back at another.
+- **Arcade Games**: for Xbox Live Arcade games only. `full` tells the game
+  it was bought; `trial` makes it its free trial version. A disc game is
+  not affected.
 
 ## Building and testing
 

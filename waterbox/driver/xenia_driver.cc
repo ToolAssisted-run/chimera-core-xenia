@@ -508,11 +508,30 @@ bool switch_on(const Options& options, std::string& error) {
 }
 }  // namespace
 
+namespace {
+// Whether a program is a container - the one file an Xbox Live Arcade game
+// is - and not a disc image: by how the file begins, as the emulator tells.
+bool is_container(const std::string& program) {
+  char magic[4] = {};
+  if (FILE* f = std::fopen(program.c_str(), "rb")) {
+    const size_t n = std::fread(magic, 1, sizeof magic, f);
+    std::fclose(f);
+    if (n != sizeof magic) {
+      return false;
+    }
+  }
+  return !std::memcmp(magic, "LIVE", 4) || !std::memcmp(magic, "PIRS", 4) || !std::memcmp(magic, "CON ", 4);
+}
+}  // namespace
+
 bool boot(const std::string& program, const Options& options, std::string& error) {
   if (!switch_on(options, error)) {
     return false;
   }
   Machine& m = *g_machine;
+  // The first licence bit is what an Arcade game reads as "bought". A disc
+  // game that asks is answered with none, as before there was this setting.
+  cvars::license_mask = is_container(program) && options.arcade_bought ? 1 : 0;
   const xe::X_STATUS status = m.emulator->LaunchPath(program);
   if (XFAILED(status)) {
     char text[64];

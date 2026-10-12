@@ -22,6 +22,10 @@ struct Options {
   std::string renderer = "null";
   // How many pads are plugged in, from the first port.
   int pads = 1;
+  // An Xbox Live Arcade game asks the console whether it was bought, and is
+  // its own free trial when the answer is no. True: bought. Only a game that
+  // is a container is told so; a disc game is answered as it always was.
+  bool arcade_bought = true;
   // The emulator's log on standard output, for a person.
   bool log = false;
   // Every handing over of the baton on standard error, for finding where two

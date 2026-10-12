@@ -2401,10 +2401,20 @@ index 15044536f..e748dfa46 100644
    // Shader and pipeline storage.
    uint32_t shader_storage_title_id_ = 0;
 diff --git a/src/xenia/kernel/kernel_state.cc b/src/xenia/kernel/kernel_state.cc
-index 0840cae09..340b27559 100644
+index 0840cae09..34836542c 100644
 --- a/src/xenia/kernel/kernel_state.cc
 +++ b/src/xenia/kernel/kernel_state.cc
-@@ -701,7 +701,7 @@ X_RESULT KernelState::ApplyTitleUpdate(
+@@ -11,6 +11,9 @@
+ 
+ #include "xenia/kernel/kernel_state.h"
+ 
++#include <chrono>
++#include <cstdio>
++
+ #include "xenia/base/byte_stream.h"
+ #include "xenia/base/logging.h"
+ #include "xenia/emulator.h"
+@@ -701,7 +704,7 @@ X_RESULT KernelState::ApplyTitleUpdate(
        XELOGW(
            "Skipping incompatible title update for {} due to signature mismatch",
            title_module->name());
@@ -2413,7 +2423,7 @@ index 0840cae09..340b27559 100644
          emulator_->display_window()->app_context().CallInUIThread([&]() {
            new xe::ui::HostNotificationWindow(
                emulator_->imgui_drawer(), "Warning!",
-@@ -718,7 +718,7 @@ X_RESULT KernelState::ApplyTitleUpdate(
+@@ -718,7 +721,7 @@ X_RESULT KernelState::ApplyTitleUpdate(
          "Applying incompatible title update for {} due to enabled "
          "allow_incompatible_title_update config option!",
          title_module->name());
@@ -2422,6 +2432,32 @@ index 0840cae09..340b27559 100644
        emulator_->display_window()->app_context().CallInUIThread([&]() {
          new xe::ui::HostNotificationWindow(
              emulator_->imgui_drawer(), "Warning!",
+@@ -877,6 +880,25 @@ void KernelState::InitXmpVolumePatch() {
+ 
+ void KernelState::TerminateTitle() {
+   XELOGD("KernelState::TerminateTitle");
++#ifdef CHIMERA_HEADLESS
++  // chimera: a program that ends itself - to go back to the console's menu,
++  // or to have the console start another program. Upstream shows a message
++  // ("please restart Xenia") and leaves. Here nobody restarts anything, and
++  // what follows below waits for the other threads to reach a safe point,
++  // which under one-thread-at-a-time they never do: the frame would never
++  // end. So the thread that asked goes no further, and the rest of the
++  // machine runs on: frames still end, with the last picture on the screen.
++  if (XThread::IsInThread()) {
++    std::fprintf(stderr,
++                 "xenia: the program asked the console to end it (to go back "
++                 "to the console's menu, or to start another program). This "
++                 "core runs one program: the machine stays on, and the "
++                 "program does nothing more.\n");
++    for (;;) {
++      xe::threading::Sleep(std::chrono::seconds(1));
++    }
++  }
++#endif
+   xmp_volume_patch_.reset();
+   auto global_lock = global_critical_region_.Acquire();
+ 
 diff --git a/src/xenia/kernel/kernel_state.h b/src/xenia/kernel/kernel_state.h
 index 6752e5675..9e8bdb364 100644
 --- a/src/xenia/kernel/kernel_state.h

@@ -1135,3 +1135,78 @@ through its menus into the first level, which is drawn as before.
 
 With `memory:views` the test script has 17 tests with `CHIMERA_ROOT` set,
 and two of them run on a machine with no game.
+
+## A game that is a container: Xbox Live Arcade (2026-10-12, issue 250)
+
+Asked for: Xbox Live Arcade games, with Xenia's `license_mask = 1` as an
+option. An Arcade game is one file with no extension: a container (the
+console's STFS format, beginning "LIVE") with the program and its data
+inside. Xenia tells a container from a disc image by how the file begins,
+so nothing in the driver had to be told which it is.
+
+What a container needed in the sandbox:
+
+- **The file is read, not mapped** (patch 0008,
+  `base/mapped_memory_posix.cc`). Xenia opens a container by mapping the
+  whole file into memory, and a sandbox maps no file. Under
+  `CHIMERA_NOFILEMAP` the mapping is a block of memory the file was read
+  into. Nothing written to it goes back to the file. Before this the
+  sandbox refused a container: "the program did not launch (C000000F)". An
+  Arcade game is small (the first ones 50 MB, the last ones up to 2 GB), and
+  being read before the machine is sealed it is not part of every savestate.
+- **A program that ends itself** (patch 0003, `KernelState::TerminateTitle`).
+  A program can ask the console to end it: to go back to the console's
+  menu, or to start another program. Upstream shows "please restart Xenia"
+  and leaves. Here the request then waited for every other thread to reach a
+  safe point, which with one thread running at a time never happens: the
+  frame never ended, and Chimera would have hung. Now the thread that asked
+  goes no further, a line on standard error says so, and the machine runs
+  on with the last picture. This is not Arcade-specific - a disc game that
+  quits to the console's menu met the same hang. NOT done: starting the
+  other program. A game made of a launcher and a second program stops at
+  the launcher.
+- **The setting "Arcade Games"** (`arcade_license`: `full`, the default, or
+  `trial`). An Arcade game and its trial are one file; the game asks the
+  console which licences it has, and the first bit means "bought". `full`
+  is Xenia's `license_mask = 1`, `trial` is 0. The driver sets it only when
+  the program is a container, so a disc game is answered as it was before
+  the setting existed and its movies still play back.
+- **The file slot's help** says how to pick a file with no extension. The
+  package still declares only `.iso`: Chimera matches files to cores by
+  extension and such a file has none, so the core is chosen by hand and the
+  New Project window notes that the file "is not one of the .iso" while
+  accepting it.
+
+Not supported: Games on Demand (a small file beside a `.data` folder of
+data files: more than one file, which the game slot does not take), title
+updates and downloadable content.
+
+**The test, and what it does not show.** No Arcade game is here, and none
+may be in this repository. `waterbox/tests/make-container.py` makes a
+container out of the disc image that is here: it finds `default.xex` in the
+image and writes it into a container of the read-only layout downloaded
+games have. The tests `container:launch` and `frontend:container` use it.
+
+- Natively and in the sandbox the container is mounted, the program is
+  loaded from it and started, and 120 frames give the same lines in both
+  (frame 120: 8,313 thread switches, 180 pictures and blanks counted). The
+  program is Mirror's Edge with none of its data, so it asks the console to
+  end it at once; that request is what showed the hang described above.
+- With the core as it was before, the same container is refused in the
+  sandbox with "the program did not launch (C000000F)".
+- Chimera's headless runner starts the package with the container, with
+  Arcade Games at `full` and at `trial`, and refuses another value.
+
+With these two the test script has 19 tests with `CHIMERA_ROOT` set; all
+pass, and the disc game's results are what they were (frame 300: 259,480
+thread switches, memory 64bc985a2c3c692b). Chimera's own package checks
+pass with the new setting (17 of 17).
+
+So what is shown is the way in: opening, mounting, loading, starting. What
+is NOT shown: a real Arcade game running, its picture, its saves, and
+whether `full` really gives the whole game - the container here is written
+by this repository's own script and read by Xenia's reader, and its program
+never asks about a licence. That needs an Arcade game. Nor has a file with
+no extension been picked in Chimera's New Project window; only the headless
+runner has been given one.
+

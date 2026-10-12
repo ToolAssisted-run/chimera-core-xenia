@@ -201,6 +201,13 @@ CORE_EXPORT int Init(void) {
     options.instruction_ps = 1000000 / mips;
   }
   options.yield_ns = std::atoll(json_string(settings, "yield_ns").c_str());
+  // Arcade Games: "full" (and no word at all) is a game that was bought
+  const std::string arcade = json_string(settings, "arcade_license");
+  if (!arcade.empty() && arcade != "full" && arcade != "trial") {
+    g_error = "no such Arcade Games setting: " + arcade;
+    return 0;
+  }
+  options.arcade_bought = arcade != "trial";
   if (options.renderer == "vulkan" && !g_bridge) {
     g_error = "the Vulkan renderer needs a device, and none was handed over (this machine may have no Vulkan, or "
               "this frontend no Vulkan bridge)";

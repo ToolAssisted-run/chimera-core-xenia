@@ -17,6 +17,7 @@ DECLARE_bool(disable_instruction_infocache);
 DECLARE_bool(store_shaders);
 DECLARE_int32(vulkan_pipeline_creation_threads);
 DECLARE_bool(vulkan_sparse_shared_memory);
+DECLARE_int32(license_mask);
 
 namespace chimera_xenia {
 

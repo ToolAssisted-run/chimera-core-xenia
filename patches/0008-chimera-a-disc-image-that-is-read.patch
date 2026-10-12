@@ -1,3 +1,83 @@
+diff --git a/src/xenia/base/mapped_memory_posix.cc b/src/xenia/base/mapped_memory_posix.cc
+index db6507564..81d095ae1 100644
+--- a/src/xenia/base/mapped_memory_posix.cc
++++ b/src/xenia/base/mapped_memory_posix.cc
+@@ -15,11 +15,67 @@
+ #include <unistd.h>
+ #include <memory>
+ 
++#ifdef CHIMERA_NOFILEMAP
++#include <algorithm>
++#include <cstdio>
++#include <cstdlib>
++#endif
++
+ #include "xenia/base/filesystem.h"
+ #include "xenia/base/platform.h"
+ 
+ namespace xe {
+ 
++#ifdef CHIMERA_NOFILEMAP
++// chimera: a sandbox maps no file into memory. What is asked for is read
++// into memory instead, whole. Nothing written to it goes back to the file:
++// the files a machine is given are not written, and what it keeps of its
++// own is in its storage, which is memory already.
++class ReadMappedMemory : public MappedMemory {
++ public:
++  ReadMappedMemory(void* data, size_t size) : MappedMemory(data, size) {}
++  ~ReadMappedMemory() override { std::free(data_); }
++  void Close(uint64_t truncate_size) override {
++    std::free(data_);
++    data_ = nullptr;
++  }
++};
++
++std::unique_ptr<MappedMemory> MappedMemory::Open(
++    const std::filesystem::path& path, Mode mode, size_t offset,
++    size_t length) {
++  FILE* file = std::fopen(path.c_str(), "rb");
++  if (!file) {
++    return nullptr;
++  }
++  if (fseeko(file, 0, SEEK_END) != 0) {
++    std::fclose(file);
++    return nullptr;
++  }
++  const size_t file_size = size_t(ftello(file));
++  const size_t map_length =
++      length ? length : (file_size > offset ? file_size - offset : 0);
++  // what lies past the end of the file reads as zero, as a mapping's last
++  // page does
++  void* data = map_length ? std::calloc(1, map_length) : nullptr;
++  if (!data) {
++    std::fclose(file);
++    return nullptr;
++  }
++  if (offset < file_size) {
++    const size_t wanted = std::min(map_length, file_size - offset);
++    if (fseeko(file, off_t(offset), SEEK_SET) != 0 ||
++        std::fread(data, 1, wanted, file) != wanted) {
++      std::free(data);
++      std::fclose(file);
++      return nullptr;
++    }
++  }
++  std::fclose(file);
++  return std::make_unique<ReadMappedMemory>(data, map_length);
++}
++#else
++
+ class PosixMappedMemory : public MappedMemory {
+  public:
+   PosixMappedMemory(void* data, size_t size, int file_descriptor)
+@@ -113,6 +169,7 @@ std::unique_ptr<MappedMemory> MappedMemory::Open(
+   return PosixMappedMemory::WrapFileDescriptor(file_descriptor, mode, offset,
+                                                length);
+ }
++#endif  // CHIMERA_NOFILEMAP
+ 
+ #if XE_PLATFORM_ANDROID
+ std::unique_ptr<MappedMemory> MappedMemory::OpenForAndroidContentUri(
 diff --git a/src/xenia/vfs/devices/disc_image_device.cc b/src/xenia/vfs/devices/disc_image_device.cc
 index 123d5a262..300f20b6f 100644
 --- a/src/xenia/vfs/devices/disc_image_device.cc

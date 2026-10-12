@@ -99,6 +99,9 @@ three addresses it comes through (`memory:views`). With it:
 - the same three with the Vulkan renderer, where every load is a new
   graphics device;
 - a run that names no CPU speed is the run at the default, 500;
+- a container made from the disc image's own program
+  (`waterbox/tests/make-container.py`) is mounted and its program run, the
+  same natively and in the sandbox, and Chimera's headless runner starts it;
 - with `CHIMERA_ROOT` set, the package in Chimera's headless runner
   (`chimera-run`): the picture, the picture with savestates, the refusal to
   start with no graphics card, the save data export, and that a movie has

@@ -386,6 +386,59 @@ else
 	fi
 fi
 
+# A game that is a container: one file with no extension, as Xbox Live
+# Arcade games are (issue 250). This repository has no such game, so one is
+# made from the disc image: tests/make-container.py puts the image's own
+# program, default.xex, in a container of the format downloaded games have.
+# The file is opened, mounted, and the program loaded from it and started,
+# through the code an Arcade game goes through. Mirror's Edge with nothing
+# but its program asks the console to end it at once, and the machine runs
+# on with a blank picture - so what is compared is that the sandbox does
+# exactly what the native build does, that the program ran (the console's
+# memory changes between frames 30 and 60), and that the program was heard
+# asking to be ended. (Before the change the sandbox refused a container:
+# "the program did not launch (C000000F)" - it could not map the file.)
+container="$work/container"
+if [ "$have_native" = 0 ]; then
+	report "container:launch" SKIP "$why_native"
+elif [ "$have_sandbox" = 0 ]; then
+	report "container:launch" SKIP "$why_sandbox"
+elif ! python3 "$here/tests/make-container.py" "$game" "$container" > "$work/container.out" 2>&1; then
+	report "container:launch" FAIL "the test container could not be made: $(tail -1 "$work/container.out")"
+else
+	"$run" "$container" "$work/cn-work" --instruction-ps "$cost_fast" --frames 120 --every 30 > "$work/cn.out" 2> "$work/cn.err"
+	"$wbx/run-wbx" "$wbx/core.wbx" "$container" --instruction-ps "$cost_fast" --frames 120 --every 30 > "$work/cw.out" 2> "$work/cw.err"
+	ram30="$(sed -n 's/^at frame=30 .* ramHash=\([0-9a-f]*\) .*/\1/p' "$work/cw.out")"
+	ram60="$(sed -n 's/^at frame=60 .* ramHash=\([0-9a-f]*\) .*/\1/p' "$work/cw.out")"
+	if [ -s "$work/cn.out" ] && cmp -s "$work/cn.out" "$work/cw.out" && grep -q "^end frame=120 " "$work/cw.out" &&
+		[ -n "$ram30" ] && [ "$ram30" != "$ram60" ] && grep -q "the program asked the console to end it" "$work/cw.err"; then
+		report "container:launch" PASS "a container made of the disc's own program ($(sed -n 's/.*: \(.*\)/\1/p' "$work/container.out")) is mounted and its program run, the same natively and in the sandbox: $(last "$work/cw.out")"
+	else
+		report "container:launch" FAIL "native [$(last "$work/cn.out")] sandbox [$(last "$work/cw.out")] $(tail -1 "$work/cw.err")"
+	fi
+fi
+# And the package takes it from the frontend's engine: a file with no
+# extension, named on the command line as a game is.
+if [ -z "$chimera_root" ] || [ ! -x "$engine" ] || [ ! -f "$package" ]; then
+	report "frontend:container" SKIP "set CHIMERA_ROOT to a Chimera checkout with build/meson-linux/chimera-run and the package (waterbox/build-package.sh -r <it>)"
+elif [ ! -s "$container" ]; then
+	report "frontend:container" SKIP "no test container (container:launch did not make one)"
+else
+	: > "$work/empty.movie"
+	env -u DISPLAY "$engine" "$package" "$container" "$work/empty.movie" --frames 60 --record "$work/fc.movie" --settings '{"renderer":"null","cpu_speed":"4000"}' > "$work/fc.out" 2>&1
+	fc=$?
+	env -u DISPLAY "$engine" "$package" "$container" "$work/empty.movie" --frames 60 --record "$work/fc-trial.movie" --settings '{"renderer":"null","cpu_speed":"4000","arcade_license":"trial"}' > "$work/fc-trial.out" 2>&1
+	fct=$?
+	env -u DISPLAY "$engine" "$package" "$container" "$work/empty.movie" --frames 60 --record "$work/fc-bad.movie" --settings '{"renderer":"null","cpu_speed":"4000","arcade_license":"neither"}' > "$work/fc-bad.out" 2>&1
+	fcb=$?
+	if [ "$fc" = 0 ] && grep -q "^frames=60" "$work/fc.out" && [ "$fct" = 0 ] && grep -q "^frames=60" "$work/fc-trial.out" &&
+		[ "$fcb" != 0 ] && grep -q "no such Arcade Games setting" "$work/fc-bad.out"; then
+		report "frontend:container" PASS "the package in chimera-run starts the container and runs its 60 frames, with Arcade Games set to full and to trial; another value is refused (exit $fcb)"
+	else
+		report "frontend:container" FAIL "full: exit $fc [$(tail -1 "$work/fc.out")]; trial: exit $fct [$(tail -1 "$work/fc-trial.out")]; a wrong value: exit $fcb [$(tail -1 "$work/fc-bad.out")]"
+	fi
+fi
+
 echo
 echo "$ok ok, $failed failed, $skipped skipped"
 [ "$failed" -eq 0 ]
