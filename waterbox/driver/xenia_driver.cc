@@ -428,7 +428,9 @@ int16_t clamp16(int32_t v) { return static_cast<int16_t>(v > 32767 ? 32767 : v <
 
 }  // namespace
 
-bool boot(const std::string& program, const Options& options, std::string& error) {
+namespace {
+// The console switched on, with nothing in it yet.
+bool switch_on(const Options& options, std::string& error) {
   if (g_machine) {
     error = "the machine is already on";
     return false;
@@ -502,7 +504,16 @@ bool boot(const std::string& program, const Options& options, std::string& error
   }
 
   m.device = device_now();
-  status = m.emulator->LaunchPath(program);
+  return true;
+}
+}  // namespace
+
+bool boot(const std::string& program, const Options& options, std::string& error) {
+  if (!switch_on(options, error)) {
+    return false;
+  }
+  Machine& m = *g_machine;
+  const xe::X_STATUS status = m.emulator->LaunchPath(program);
   if (XFAILED(status)) {
     char text[64];
     std::snprintf(text, sizeof(text), "the program did not launch (%08X)", status);
@@ -710,6 +721,73 @@ const std::vector<uint8_t>& savedata_bytes(size_t index) {
 bool watched_access(void* host_address, bool is_write) {
   auto* handler = xe::cpu::MMIOHandler::global_handler();
   return handler && handler->HandleWatchedAccess(host_address, is_write);
+}
+
+namespace {
+// changed where a fault is handled, which no compiler sees coming
+volatile int g_view_notices = 0;
+std::pair<uint32_t, uint32_t> view_notice(void*, uint32_t physical_address, uint32_t length, bool) {
+  g_view_notices = g_view_notices + 1;
+  return std::make_pair(physical_address, length);
+}
+}  // namespace
+
+// The console's 512 MiB are seen at three places in its address space
+// (0xA0000000, 0xC0000000, and 0xE0000000 one page on), and a program may
+// write a page through any of them. A renderer watches pages it has copies
+// of; whichever way the write comes, it must be told, once, and the write
+// must land.
+bool check_watched_views(std::string& report) {
+  Options options;
+  std::string error;
+  if (!switch_on(options, error)) {
+    report = error;
+    return false;
+  }
+  xe::Memory* memory = g_machine->emulator->memory();
+  void* handle = memory->RegisterPhysicalMemoryInvalidationCallback(view_notice, nullptr);
+  static const uint32_t bases[] = {0xA0000000u, 0xC0000000u, 0xE0000000u};
+  bool good = true;
+  char line[160];
+  for (const uint32_t base : bases) {
+    auto* heap = memory->LookupHeap(base);
+    uint32_t address = 0;
+    if (!heap->Alloc(heap->page_size(), heap->page_size(), xe::kMemoryAllocationReserve | xe::kMemoryAllocationCommit,
+                     xe::kMemoryProtectRead | xe::kMemoryProtectWrite, false, &address)) {
+      std::snprintf(line, sizeof line, "no page could be had at %08X\n", base);
+      report += line;
+      good = false;
+      continue;
+    }
+    const uint32_t physical = memory->GetPhysicalAddress(address);
+    // the same page by each of its three addresses; the page's own first
+    const uint32_t ways[] = {address, 0xA0000000u + physical, 0xC0000000u + physical, 0xE0000000u + physical - 0x1000u};
+    uint8_t value = 0x40;
+    for (size_t i = 0; i < sizeof ways / sizeof *ways; i++) {
+      const uint32_t way = ways[i];
+      if (i > 0 && way == address) {
+        continue;
+      }
+      value++;
+      g_view_notices = 0;
+      memory->EnablePhysicalMemoryAccessCallbacks(physical, 0x1000, true, false);
+      // each write where it is written: a compiler may otherwise make one
+      // store of the two, after the count between them is read
+      *memory->TranslateVirtual<volatile uint8_t*>(way + 8) = value;
+      const int first = g_view_notices;
+      *memory->TranslateVirtual<volatile uint8_t*>(way + 9) = value;
+      const uint8_t read = *memory->TranslateVirtual<volatile uint8_t*>(address + 8);
+      const int second = g_view_notices;
+      const bool fine = first == 1 && second == 1 && read == value;
+      std::snprintf(line, sizeof line, "page %08X (physical %08X) written at %08X: %s (told %d then %d times, reads %02X)\n",
+                    address, physical, way, fine ? "ok" : "WRONG", first, second, read);
+      report += line;
+      good = good && fine;
+    }
+    heap->Release(address);
+  }
+  memory->UnregisterPhysicalMemoryInvalidationCallback(handle);
+  return good;
 }
 
 bool bus_ready() { return g_machine != nullptr; }

@@ -84,8 +84,10 @@ skipped test is not a pass.
 
 Most tests need a disc image this repository cannot contain: Mirror's Edge
 (NTSC), at `tests/roms/Mirrors Edge [NTSCU][NTSCJ].iso` or named by
-`XENIA_TEST_GAME`. Without it only the instruction tests run (4,460 of them,
-in the sandbox, compared with the native result). With it:
+`XENIA_TEST_GAME`. Without it two tests run: the instruction tests (4,460 of
+them, in the sandbox, compared with the native result), and a check that a
+write to a page the renderer watches is noticed whichever of the page's
+three addresses it comes through (`memory:views`). With it:
 
 - two native runs give the same result, and a run with another instruction
   cost does not;
@@ -131,6 +133,8 @@ host took, how many guest instructions ran and which threads ran them.
 on a public runner, runs the test script and Chimera's package checks, and
 publishes the package. A runner has no game, so there the tests that need
 one are skipped; they are run where the game is before anything is pushed.
+The two tests that need no game must pass there, and the workflow asks for
+them by name.
 
 ## When something goes wrong
 

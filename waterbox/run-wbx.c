@@ -5,8 +5,11 @@
  * by the harness the native runner uses (gate-harness.h).
  *
  *   run-wbx <core.wbx> <program> [options]
+ *   run-wbx <core.wbx> --check-views
  *
- * The options are the harness's; the states are miniBox's.
+ * The options are the harness's; the states are miniBox's. The second form
+ * needs no program: it runs the core's own check of watched memory
+ * (CheckWatchedViews) and ends with 0 when its last line is "views ok".
  */
 #include "minibox.h"
 #include "vk-host.h"
@@ -124,6 +127,7 @@ int main(int argc, char **argv)
 		fprintf(stderr, "usage: run-wbx <core.wbx> <program> [options]\n");
 		return 2;
 	}
+	const int check_views = !strcmp(argv[2], "--check-views");
 	struct harness_opts o;
 	if (!harness_parse(argc, argv, 3, &o))
 		return 2;
@@ -148,6 +152,26 @@ int main(int argc, char **argv)
 	}
 	g_host = (mb_host *)r.data;
 
+	if (check_views) {
+		wbx_activate_host(g_host, &r);
+		if (r.error_message[0]) {
+			fprintf(stderr, "run-wbx: activate: %s\n", (const char *)r.error_message);
+			return 2;
+		}
+		/* a core that dies in the call hands back nothing to read */
+		const char *(*check)(void) = (const char *(*)(void))proc("CheckWatchedViews");
+		const char *report = check();
+		char death[512] = "";
+		wbx_get_death(g_host, death, sizeof death, &r);
+		const int alive = report && !death[0];
+		if (alive)
+			fputs(report, stdout);
+		else
+			printf("the core died during the check: %s\n", death);
+		fflush(stdout);
+		const size_t n = alive ? strlen(report) : 0;
+		return n >= 9 && !strcmp(report + n - 9, "views ok\n") ? 0 : 1;
+	}
 	const char *base = strrchr(argv[2], '/');
 	base = base ? base + 1 : argv[2];
 	wbx_mount_file_path(g_host, base, argv[2], &r);

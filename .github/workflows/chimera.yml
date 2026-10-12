@@ -133,9 +133,10 @@ jobs:
         run: sh ./waterbox/build-package.sh -r "$GITHUB_WORKSPACE/chimera-checkout"
 
       - name: Run the test script
-        # With no game on the runner every test but the instruction tests is
-        # skipped. A run in which that one did not pass has tested nothing,
-        # so it is asked for by name.
+        # With no game on the runner every test is skipped but two: the
+        # instruction tests, and the check of watched memory. A run in which
+        # those did not pass has tested nothing, so they are asked for by
+        # name.
         env:
           CHIMERA_ROOT: ${{ github.workspace }}/chimera-checkout
         run: |
@@ -144,6 +145,7 @@ jobs:
           cat gate.out
           [ "$rc" -eq 0 ]
           grep -q '^ppc:sandbox  *PASS ' gate.out
+          grep -q '^memory:views  *PASS ' gate.out
 
       - name: Chimera's checks of the package
         # Chimera's own tests of an installed package, run against this one:

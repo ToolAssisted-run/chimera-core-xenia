@@ -398,7 +398,7 @@ index 0e0370526..819183d71 100644
      /*
          we want our register which points to the context to have 0xE0000000 in
 diff --git a/src/xenia/memory.cc b/src/xenia/memory.cc
-index 706bd4809..c64b58a92 100644
+index 706bd4809..7372c2961 100644
 --- a/src/xenia/memory.cc
 +++ b/src/xenia/memory.cc
 @@ -7,6 +7,7 @@
@@ -488,7 +488,7 @@ index 706bd4809..c64b58a92 100644
  
    // Prepare virtual heaps.
    heaps_.v00000000.Initialize(this, virtual_membase_, HeapType::kGuestVirtual,
-@@ -601,12 +653,23 @@ bool Memory::AccessViolationCallback(
+@@ -601,12 +653,57 @@ bool Memory::AccessViolationCallback(
    // Access via physical_membase_ is special, when need to bypass everything
    // (for instance, for a data provider to actually write the data) so only
    // triggering callbacks on virtual memory regions.
@@ -501,6 +501,40 @@ index 706bd4809..c64b58a92 100644
 +          reinterpret_cast<size_t>(virtual_membase_) + 0x100000000ull) {
 +    return false;
 +  }
++  // chimera: and a page of physical memory is ONE page here, whichever of
++  // its addresses the program used (0xA0000000, 0xC0000000, 0xE0000000 one
++  // page on, 0x7F000000), so the fault does not say which. Each of those
++  // heaps keeps its own list of watched pages, and a page is on the list of
++  // the heap it was allocated in: every heap that has an address for the
++  // page is asked. (Asking only the first ended a game that allocates at
++  // 0xE0000000 at its first write to a watched page.)
++  {
++    const size_t offset = reinterpret_cast<size_t>(host_address) -
++                          reinterpret_cast<size_t>(virtual_membase_);
++    if (offset >= chimera::kPhysicalBase &&
++        offset - chimera::kPhysicalBase < 0x20000000u) {
++      const uint32_t physical = uint32_t(offset - chimera::kPhysicalBase);
++      PhysicalHeap* const views[] = {&heaps_.vA0000000, &heaps_.vC0000000,
++                                     &heaps_.vE0000000, &heaps_.v7F000000};
++      bool handled = false;
++      bool first = true;
++      for (PhysicalHeap* view : views) {
++        const uint32_t view_first =
++            view->GetPhysicalAddress(view->heap_base());
++        if (physical < view_first ||
++            physical - view_first >= view->heap_size()) {
++          continue;
++        }
++        auto lock = first ? std::move(global_lock_locked_once)
++                          : global_critical_region_.Acquire();
++        first = false;
++        handled |= view->TriggerCallbacks(
++            std::move(lock), view->heap_base() + (physical - view_first), 1,
++            is_write, false);
++      }
++      return handled;
++    }
++  }
 +#else
    if (reinterpret_cast<size_t>(host_address) <
            reinterpret_cast<size_t>(virtual_membase_) ||
@@ -512,7 +546,7 @@ index 706bd4809..c64b58a92 100644
    uint32_t virtual_address = HostToGuestVirtual(host_address);
    BaseHeap* heap = LookupHeap(virtual_address);
    if (heap->heap_type() != HeapType::kGuestPhysical) {
-@@ -1598,8 +1661,9 @@ bool BaseHeap::Protect(uint32_t address, uint32_t size, uint32_t protect,
+@@ -1598,8 +1695,9 @@ bool BaseHeap::Protect(uint32_t address, uint32_t size, uint32_t protect,
          }
  
          xe::memory::Protect(
@@ -524,7 +558,7 @@ index 706bd4809..c64b58a92 100644
              xe_page_size, host_access, nullptr);
        }
  
-@@ -2084,7 +2148,8 @@ template <bool enable_invalidation_notifications, bool enable_data_providers>
+@@ -2084,7 +2182,8 @@ template <bool enable_invalidation_notifications, bool enable_data_providers>
  XE_NOINLINE void PhysicalHeap::EnableAccessCallbacksInner(
      const uint32_t system_page_first, const uint32_t system_page_last,
      xe::memory::PageAccess protect_access) XE_RESTRICT {
@@ -534,7 +568,7 @@ index 706bd4809..c64b58a92 100644
    uint32_t protect_system_page_first = UINT32_MAX;
  
    SystemPageFlagsBlock* XE_RESTRICT sys_page_flags = system_page_flags_.data();
-@@ -2250,7 +2315,8 @@ bool PhysicalHeap::TriggerCallbacks(
+@@ -2250,7 +2349,8 @@ bool PhysicalHeap::TriggerCallbacks(
      // read-only if it also has a write watch, otherwise restore the guest
      // protection. Then clear the read watch.
      if (unprotect) {
@@ -544,7 +578,7 @@ index 706bd4809..c64b58a92 100644
        for (uint32_t i = system_page_first; i <= system_page_last; ++i) {
          uint64_t bit = uint64_t(1) << (i & 63);
          SystemPageFlagsBlock& flags = system_page_flags_[i >> 6];
-@@ -2376,7 +2442,8 @@ bool PhysicalHeap::TriggerCallbacks(
+@@ -2376,7 +2476,8 @@ bool PhysicalHeap::TriggerCallbacks(
  
    // Unprotect ranges that need unprotection.
    if (unprotect) {

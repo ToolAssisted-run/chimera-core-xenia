@@ -349,12 +349,12 @@ Proved natively, where both layouts can be had: with the block and the
 inline checks the game's run is the run it was - 258,326, 437,
 ed611adef65dbf20 - and the instruction tests fail the reference's 28,320.
 
-Not dealt with: one thing the views gave that a block cannot. Upstream
-protects a page in the guest's views to notice a write (the GPU's caches do
-this) while reaching the same page itself, unprotected, through the
-physical view. With one block the emulator's own access meets its own
-protection. The null renderer sets no such watch, so nothing has met it
-yet; the Vulkan renderer will.
+One thing the views gave that a block cannot. Upstream protects a page in
+the guest's views to notice a write (the GPU's caches do this) while
+reaching the same page itself, unprotected, through the physical view. With
+one block the emulator's own access meets its own protection. What that
+needed is under "M4: the picture, through the bridge" (a watched page) and
+under "A watched page, written through another address" (issue 249).
 
 ## M2: the recompiler from the memory base (2026-10-10)
 
@@ -1070,3 +1070,68 @@ what is actually linked into the core. Three entries were for libraries
 that are not linked (snappy, RapidJSON, the DXBC checksum) and were
 removed; three that are linked were missing and were added (cxxopts, and
 Xenia's copies of a DES and a SHA-256 implementation). 27 components.
+
+
+## A watched page, written through another address (2026-10-12, issue 249)
+
+Reported with four games (Dead or Alive 4, Battle Fantasia, Burnout
+Revenge, Dead or Alive 5): after a few hundred or a few thousand frames
+"the core crashed: it wrote to address ...". The four logs show the same
+thing. The instruction that faulted was the game's own code storing eight
+bytes of what looks like picture data, at the first byte of a page, and the
+page was read-only. In each log one register holds an address just below
+the store's, in the 0xE0000000 range.
+
+What was wrong. The console's 512 MiB of physical memory are seen at three
+places in its address space: 0xA0000000, 0xC0000000 and 0xE0000000 (and the
+first 16 MiB again at 0x7F000000). Each place has its own heap in Xenia, and
+a page is allocated in one of them. The renderer keeps copies of what the
+game draws from, and to hear when the game changes a page it makes the page
+read-only; each heap keeps its own list of the pages watched this way.
+Upstream each place is a separate mapping, so a fault's address says which
+heap to ask. This core keeps the memory as one block ("M2: the memory in one
+block"), every address of a page is folded onto the 0xA0000000 one, and the
+fault handler asked the 0xA0000000 heap only. A game that allocates at
+0xE0000000 has its pages on that heap's list: the first heap answered "not
+watched, and not mine to write", and the core was stopped. Mirror's Edge
+allocates what the renderer watches at 0xA0000000, which is why it never
+showed.
+
+The fix (patch 0006, `Memory::AccessViolationCallback`): a fault on a page
+of physical memory asks every heap that has an address for that page. The
+one that watches it tells the renderer and opens the page; the others
+answer as before.
+
+The test, `memory:views`, needs no game, so it also runs on a CI runner.
+The console is switched on with nothing in it. One page is allocated at
+each of the three places and watched as a renderer watches it, and each is
+written through all three of its addresses: nine writes. Each must land,
+and the watcher must be told exactly once. It runs natively and in the
+sandbox, and the two must print the same lines
+(`run-frames --check-views`, `run-wbx <core.wbx> --check-views`; the core's
+export is `CheckWatchedViews`).
+
+- Before the fix: in the sandbox the core died at the first write to the
+  page allocated at 0xC0000000, with the report's own message; natively the
+  same write never returned.
+- After it: nine writes, each told of once, the same lines in both.
+- Broken on purpose (only the first heap asked again, by hand): the test
+  fails with the report's message.
+- Two mistakes in the first version of the check are worth knowing. A
+  compiler does not see a fault handler coming: the count it changes must
+  be `volatile`, or the value read after the write is the one from before;
+  and two neighbouring one-byte writes were made one two-byte store placed
+  after the count between them was read, so the writes are `volatile` too.
+
+Not proved: none of the four games is here, so none was run. What is proved
+is that the fault in their logs is this one - a write, by the game's code,
+to a watched page allocated at 0xE0000000 - and that such a write no longer
+ends the core. A game may of course stop for another reason further on.
+
+The game that is here still runs with the change. The whole test script
+passes (17 tests, none skipped). On Windows on the GeForce GTX 1060, in
+Chimera's headless runner, a movie of 3,600 frames takes Mirror's Edge
+through its menus into the first level, which is drawn as before.
+
+With `memory:views` the test script has 17 tests with `CHIMERA_ROOT` set,
+and two of them run on a machine with no game.

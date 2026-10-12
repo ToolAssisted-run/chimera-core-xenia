@@ -4,14 +4,18 @@
 // tree only: a frame is a stretch of the machine's own clock.
 //
 //   run-frames <program> <work directory, which must not exist> [options]
+//   run-frames --check-views <work directory, which must not exist>
 //
-// The options are the harness's. Natively there are no states.
+// The options are the harness's. Natively there are no states. The second
+// form needs no program: it runs the core's own check of watched memory
+// (CheckWatchedViews) and ends with 0 when its last line is "views ok".
 #include <sys/stat.h>
 #include <unistd.h>
 
 #include <climits>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 
 extern "C" {
 #include "../gate-harness.h"
@@ -35,6 +39,7 @@ void StateSaving(void);
 uint32_t* GetVideoBgra(void);
 int GetVideoWidth(void);
 int GetVideoHeight(void);
+const char* CheckWatchedViews(void);
 }
 
 static bool write_file(const char* name, const char* text) {
@@ -54,6 +59,17 @@ int main(int argc, char** argv) {
   struct harness_opts o;
   if (!harness_parse(argc, argv, 3, &o)) {
     return 2;
+  }
+  if (!std::strcmp(argv[1], "--check-views")) {
+    if (mkdir(argv[2], 0777) != 0 || chdir(argv[2]) != 0) {
+      std::fprintf(stderr, "run-frames: %s must be a directory that can be made and is not there yet\n", argv[2]);
+      return 2;
+    }
+    const char* report = CheckWatchedViews();
+    std::fputs(report, stdout);
+    std::fflush(stdout);
+    const size_t n = std::strlen(report);
+    std::_Exit(n >= 9 && !std::strcmp(report + n - 9, "views ok\n") ? 0 : 1);
   }
   char program[PATH_MAX];
   if (!realpath(argv[1], program)) {

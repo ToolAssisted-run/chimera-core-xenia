@@ -132,6 +132,16 @@ CORE_EXPORT int GuestFaultHandler(uint64_t addr, uint64_t is_write) {
 }
 #endif
 
+// For the core's own tests, with no game: see check_watched_views. The text
+// ends with "views ok" when every write was right.
+CORE_EXPORT const char* CheckWatchedViews(void) {
+  static std::string report;
+  report.clear();
+  const bool good = chimera_xenia::check_watched_views(report);
+  report += good ? "views ok\n" : "views WRONG\n";
+  return report.c_str();
+}
+
 #ifdef CHIMERA_GUEST
 // The Vulkan bridge: the host's dispatcher, handed over before Init. Without
 // it there is no device in the sandbox and only the renderer that draws

@@ -94,6 +94,13 @@ const std::vector<uint8_t>& savedata_bytes(size_t index);
 // the page was let go and the access can be tried again.
 bool watched_access(void* host_address, bool is_write);
 
+// A check of the core itself, with no program: the console is switched on,
+// one page in each of the three places its memory is seen is watched as a
+// renderer watches it, and written through each of the three. True when
+// every write landed and was told of once; what happened is in report, a
+// line a write. The machine is of no use afterwards.
+bool check_watched_views(std::string& report);
+
 // The console's 32-bit address space, as an observer reads it (a closed
 // page reads as what it holds) and as a tool writes it (a page that cannot be
 // written is left alone; one that the renderer watches tells it so).
