@@ -1333,3 +1333,45 @@ Every game's memory moves with this (the answers to queries and the random
 bytes are others), so a movie made with an earlier build will not play back.
 
 Not measured: a game in play rather than its opening, and any other card.
+
+## A game that never finishes loading at the default CPU Speed (chimera issue 266, 2026-10-14)
+
+**Reported:** Prince of Persia Classic (an Xbox Live Arcade game) does not
+work. With the container fix of issue 250 it starts, shows its logos and its
+story screens, and then stays on "Now loading..." - for 40,000 frames, which
+is as long as it was left.
+
+**What it is doing.** Nothing is waiting. Two threads share the processor
+half and half: the game's main thread, which draws the loading screen and
+never gives way between frames, and the thread that loads the level. The
+loading thread works in turns it times itself (it reads the clock, takes
+memory, works, gives the memory back, reads the clock again), and at this
+speed a turn's fixed work uses up the turn: the heap's addresses keep
+moving and the level is never ready.
+
+**It is the CPU Speed setting.** The same input at each speed, with the
+renderer that draws nothing:
+
+| CPU Speed | what happens |
+| --- | --- |
+| 500 (the default) | still loading after 40,000 frames |
+| 1000 | still loading after 9,000 frames |
+| 2000 | loaded within a few hundred frames |
+| 5000 (not a choice of the setting; the runner's `--instruction-ps 200`) | loaded within a few hundred frames |
+
+And on a GeForce GTX 1060 through Chimera's runner, the published core with
+CPU Speed 2000: the story screens, then the first level with the prince in
+it and the clock at 59:59 (9,000 frames, 722 seconds of the host).
+
+**Changed:** the setting's text and the README say that some games do not
+finish loading at the lower speeds, name this one, and say what to do. The
+default is not changed: it is the owner's, and it was chosen so that a game
+which keeps the processor busy runs near full speed.
+
+**Not done, and worth knowing.** The console has six hardware threads and
+this machine has one clock that every thread's instructions are added to,
+so a thread that spins takes time from one that works. A clock that let
+threads on different hardware threads run at the same moment would give the
+loading thread its whole turn; it would also make every game that spins
+cost the host more. That is a change to what the machine is, not made here.
+

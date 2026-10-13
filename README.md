@@ -42,7 +42,10 @@ says which games work in Xenia itself.
 - **CPU Speed**: how many million instructions the console's processor runs
   in a second. 2000 is the closest to a real console. 500 is the default
   because it runs faster on your computer, which matters when making a TAS.
-  A movie made at one speed does not play back at another.
+  Some games never finish loading at the lower speeds (Prince of Persia
+  Classic needs 2000): if a game stays on a loading screen, make a new
+  project with a higher one. A movie made at one speed does not play back
+  at another.
 - **Arcade Games**: for Xbox Live Arcade games only. `full` tells the game
   it was bought; `trial` makes it its free trial version. A disc game is
   not affected.
