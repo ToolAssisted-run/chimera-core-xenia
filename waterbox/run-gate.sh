@@ -386,6 +386,30 @@ else
 	fi
 fi
 
+# A thread that waits by reading the clock. A program may wait for a moment
+# to come by asking what time it is in a loop, and a thread runs here until
+# its turn - a slice of instructions - is spent. Asking the time used to give
+# it a whole slice again, so such a thread kept its turn for ever: the
+# machine's time ran away under it, no other thread ran and no frame ended
+# (issue 258: The Beatles: Rock Band stopped at frame 20). The check needs
+# no game: one thread reads the clock in a loop, paying for instructions as
+# recompiled code does, while another sleeps five milliseconds of the
+# machine's time. The sleeper must wake when its time has come, natively
+# and in the sandbox alike.
+if [ ! -x "$run" ]; then
+	report "clock:turn" SKIP "no build/vsched/bin/Linux/run-frames: run waterbox/build-native.sh"
+elif [ ! -x "$wbx/run-wbx" ] || [ ! -f "$wbx/core.wbx" ]; then
+	report "clock:turn" SKIP "no build/wbx/core.wbx: run waterbox/build-guest.sh"
+else
+	timeout 300 "$run" --check-turns "$work/turns-work" > "$work/turns-native.out" 2> "$work/turns-native.err"
+	timeout 300 "$wbx/run-wbx" "$wbx/core.wbx" --check-turns > "$work/turns-sandbox.out" 2> "$work/turns-sandbox.err"
+	if [ "$(tail -1 "$work/turns-native.out")" = "turns ok" ] && cmp -s "$work/turns-native.out" "$work/turns-sandbox.out"; then
+		report "clock:turn" PASS "a thread that reads the clock in a loop gives way when its turn is spent - natively and in the sandbox: $(head -1 "$work/turns-sandbox.out")"
+	else
+		report "clock:turn" FAIL "native [$(head -1 "$work/turns-native.out")] sandbox [$(head -1 "$work/turns-sandbox.out")]"
+	fi
+fi
+
 # A game that is a container: one file with no extension, as Xbox Live
 # Arcade games are (issue 250). This repository has no such game, so one is
 # made from the disc image: tests/make-container.py puts the image's own

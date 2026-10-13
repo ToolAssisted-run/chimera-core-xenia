@@ -751,10 +751,10 @@ index a0cae20e2..029311833 100644
  
 diff --git a/src/xenia/base/threading_chimera.cc b/src/xenia/base/threading_chimera.cc
 new file mode 100644
-index 000000000..45397cad3
+index 000000000..e4d456f2c
 --- /dev/null
 +++ b/src/xenia/base/threading_chimera.cc
-@@ -0,0 +1,1002 @@
+@@ -0,0 +1,1017 @@
 +// chimera: the threading layer on one clock.
 +//
 +// Upstream's threads are the host's, and time is the host's. Here every
@@ -893,11 +893,17 @@ index 000000000..45397cad3
 +}
 +
 +// Turn the instructions the running thread has executed since the last time
-+// into time, and give whoever runs next a whole slice.
++// into time. The slice is left as it is: a thread that only asks what time
++// it is must still come to the end of its turn. (It did not: reading the
++// clock gave it a whole slice again, so a program that waits by reading the
++// clock in a loop kept the baton for ever, the clock ran away under it and
++// no frame ended - chimera issue 258.)
 +int64_t g_picosecond_remainder = 0;
++// what the budget read the last time instructions were turned into time
++int64_t g_budget_accounted = kSliceInstructions;
 +void Account() {
-+  const int64_t used = kSliceInstructions - chimera::g_instruction_budget;
-+  chimera::g_instruction_budget = kSliceInstructions;
++  const int64_t used = g_budget_accounted - chimera::g_instruction_budget;
++  g_budget_accounted = chimera::g_instruction_budget;
 +  if (used > 0) {
 +    g_instructions_total += static_cast<uint64_t>(used);
 +    if (S().current) {
@@ -907,6 +913,13 @@ index 000000000..45397cad3
 +    S().now += ps / 1000;
 +    g_picosecond_remainder = ps % 1000;
 +  }
++}
++
++// Whoever runs next gets a whole slice: said where the baton may be handed
++// over, and nowhere else.
++void NewSlice() {
++  chimera::g_instruction_budget = kSliceInstructions;
++  g_budget_accounted = kSliceInstructions;
 +}
 +
 +class ChimeraThread;
@@ -1046,6 +1059,7 @@ index 000000000..45397cad3
 +
 +void YieldNow(VThread* self) {
 +  Account();
++  NewSlice();
 +  S().now += kYieldCostNs;
 +  if (xe::chimera::g_trace_schedule) {
 +    std::fprintf(stderr, "sched %u yield %lld %s\n", self->id,
@@ -1060,6 +1074,7 @@ index 000000000..45397cad3
 +                 bool alertable, int64_t deadline, size_t* out_index) {
 +  auto& s = S();
 +  Account();
++  NewSlice();
 +  s.now += kYieldCostNs;
 +  if (xe::chimera::g_trace_schedule) {
 +    std::fprintf(stderr, "sched %u block%zu %lld %s\n", self->id, count,

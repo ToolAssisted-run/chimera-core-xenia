@@ -809,6 +809,44 @@ bool check_watched_views(std::string& report) {
   return good;
 }
 
+// With no game: a thread that waits by reading the clock in a loop, as a
+// program does that waits for a moment to come, and another that sleeps five
+// milliseconds of the machine's time. The reader does here what a block of
+// recompiled code does - pays for its instructions out of its slice, and
+// asks for the next thread when the slice is spent. It must come to the end
+// of its turn, or the sleeper never runs and the machine's time runs away
+// under the reader (chimera issue 258: no frame ended).
+bool check_turns(std::string& report) {
+  static volatile bool woke;
+  woke = false;
+  auto sleeper = xe::threading::Thread::Create({}, [] {
+    xe::threading::Sleep(std::chrono::milliseconds(5));
+    woke = true;
+  });
+  const int64_t start = xe::chimera::VirtualNanoseconds();
+  const uint64_t switches = xe::chimera::Switches();
+  uint64_t reads = 0;
+  // ten seconds of the machine's time at most, at fifty instructions a read
+  while (!woke && reads < 100000000) {
+    xe::chimera::g_instruction_budget -= 50;
+    if (xe::chimera::g_instruction_budget < 0) {
+      xe::chimera::BudgetSpent(nullptr);
+    }
+    xe::chimera::VirtualNanoseconds();
+    reads++;
+  }
+  const int64_t took = xe::chimera::VirtualNanoseconds() - start;
+  // woken at the first end of a turn after its five milliseconds: within a
+  // slice or two of them
+  const bool good = woke && took >= 5000000 && took < 6000000;
+  char line[200];
+  std::snprintf(line, sizeof line, "the clock was read %llu times in %lld ns of the machine's time, the baton changed hands %llu times, the sleeper %s\n",
+                static_cast<unsigned long long>(reads), static_cast<long long>(took),
+                static_cast<unsigned long long>(xe::chimera::Switches() - switches), woke ? "woke" : "never ran");
+  report += line;
+  return good;
+}
+
 bool bus_ready() { return g_machine != nullptr; }
 
 bool bus_read(uint32_t address, uint8_t* out, size_t length) {

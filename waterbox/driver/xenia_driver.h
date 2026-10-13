@@ -104,6 +104,9 @@ bool watched_access(void* host_address, bool is_write);
 // every write landed and was told of once; what happened is in report, a
 // line a write. The machine is of no use afterwards.
 bool check_watched_views(std::string& report);
+// With no game: a thread that reads the clock in a loop comes to the end of
+// its turn (issue 258).
+bool check_turns(std::string& report);
 
 // The console's 32-bit address space, as an observer reads it (a closed
 // page reads as what it holds) and as a tool writes it (a page that cannot be

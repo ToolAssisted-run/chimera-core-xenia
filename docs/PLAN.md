@@ -1233,3 +1233,53 @@ steps end with the engine's refusal.
 
 Still not proved: a real Arcade game. The test container is made from a
 disc game's own program.
+
+
+## A game that waits by reading the clock never gave way (2026-10-13, issue 258)
+
+The Beatles: Rock Band stopped at frame 20 with the published core, and a
+user's copy of Onechanbara: Bikini Samurai Squad at frame 10. Here the
+Beatles did not crash: the run never reached frame 21, on Linux with no
+renderer and on Windows with Vulkan alike (600 seconds waited on a GeForce
+GTX 1060).
+
+**What it was.** One thread runs at a time and keeps its turn until it has
+spent a slice of 100,000 instructions ("M1" above). The instructions it has
+run are turned into the machine's time whenever the scheduler is asked
+anything - and that same step gave the thread a whole slice again. Asking
+what time it is is one of those questions, and it hands the turn to nobody.
+So a thread that waits for a moment by reading the clock in a loop, which is
+what the game's main thread does there, never came to the end of its turn:
+the clock ran on under it (277 seconds of the machine's time in 40 of the
+host's), nobody else ran, and the frame never ended. Read off a debugger:
+the count of handovers stood still at 670 while the time and the count of
+instructions charged grew, and the slice was always found nearly full.
+
+**The change** (patch 0003, `base/threading_chimera.cc`). Turning
+instructions into time no longer touches the slice. A new slice is given
+only where the turn can be handed over: at a yield and at a wait. A wait
+that is answered at once, with its deadline worked out on the way, had the
+same hole and is closed by the same change.
+
+Every game's timing moves with this - a thread that reads the clock is now
+interrupted where it was not - so a movie made with an earlier build of this
+core will not play back with this one. A project names the build it was made
+with, as always.
+
+**Tested.** New check `clock:turn`, with no game: one thread reads the clock
+in a loop, paying for instructions as recompiled code does, while another
+sleeps five milliseconds of the machine's time. The sleeper wakes 5.23 ms
+later, after 52,026 reads, natively and in the sandbox with the same line.
+With the old behaviour put back for one build the reader ran its hundred
+million reads, ten seconds of the machine's time, and "the sleeper never
+ran". The Beatles: Rock Band then runs 600 frames with no renderer on Linux
+in 11 seconds, with sound, and 900 frames on Windows on the GTX 1060 with
+Vulkan, where it shows its first logo. Bullet Witch, which did not stop
+here before either, runs its 900 frames there too.
+
+**Not shown.** The crash the two reports describe - "it read or ran address
+0x20" - was not seen here: the Beatles hung at the same frame instead, and
+that address is in the middle of an instruction of the core, so something
+had already gone wrong before it. It is taken to be the same fault ending
+another way on the reporter's machine; that is a guess until they try this
+build. Onechanbara was not tried: it is not here.

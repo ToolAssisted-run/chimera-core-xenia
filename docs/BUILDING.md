@@ -84,10 +84,12 @@ skipped test is not a pass.
 
 Most tests need a disc image this repository cannot contain: Mirror's Edge
 (NTSC), at `tests/roms/Mirrors Edge [NTSCU][NTSCJ].iso` or named by
-`XENIA_TEST_GAME`. Without it two tests run: the instruction tests (4,460 of
-them, in the sandbox, compared with the native result), and a check that a
+`XENIA_TEST_GAME`. Without it three tests run: the instruction tests (4,460
+of them, in the sandbox, compared with the native result), a check that a
 write to a page the renderer watches is noticed whichever of the page's
-three addresses it comes through (`memory:views`). With it:
+three addresses it comes through (`memory:views`), and a check that a thread
+which waits by reading the clock in a loop still gives way to the others
+(`clock:turn`). With it:
 
 - two native runs give the same result, and a run with another instruction
   cost does not;

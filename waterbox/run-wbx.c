@@ -6,10 +6,13 @@
  *
  *   run-wbx <core.wbx> <program> [options]
  *   run-wbx <core.wbx> --check-views
+ *   run-wbx <core.wbx> --check-turns
  *
- * The options are the harness's; the states are miniBox's. The second form
- * needs no program: it runs the core's own check of watched memory
- * (CheckWatchedViews) and ends with 0 when its last line is "views ok".
+ * The options are the harness's; the states are miniBox's. The other two
+ * forms need no program: each runs one of the core's own checks - of watched
+ * memory (CheckWatchedViews), or of a thread that reads the clock in a loop
+ * (CheckTurns) - and ends with 0 when its last line is "views ok" or
+ * "turns ok".
  */
 #include "minibox.h"
 #include "vk-host.h"
@@ -127,7 +130,8 @@ int main(int argc, char **argv)
 		fprintf(stderr, "usage: run-wbx <core.wbx> <program> [options]\n");
 		return 2;
 	}
-	const int check_views = !strcmp(argv[2], "--check-views");
+	const int check_turns = !strcmp(argv[2], "--check-turns");
+	const int check_views = !strcmp(argv[2], "--check-views") || check_turns;
 	struct harness_opts o;
 	if (!harness_parse(argc, argv, 3, &o))
 		return 2;
@@ -159,7 +163,7 @@ int main(int argc, char **argv)
 			return 2;
 		}
 		/* a core that dies in the call hands back nothing to read */
-		const char *(*check)(void) = (const char *(*)(void))proc("CheckWatchedViews");
+		const char *(*check)(void) = (const char *(*)(void))proc(check_turns ? "CheckTurns" : "CheckWatchedViews");
 		const char *report = check();
 		char death[512] = "";
 		wbx_get_death(g_host, death, sizeof death, &r);
@@ -170,7 +174,7 @@ int main(int argc, char **argv)
 			printf("the core died during the check: %s\n", death);
 		fflush(stdout);
 		const size_t n = alive ? strlen(report) : 0;
-		return n >= 9 && !strcmp(report + n - 9, "views ok\n") ? 0 : 1;
+		return n >= 9 && !strcmp(report + n - 9, check_turns ? "turns ok\n" : "views ok\n") ? 0 : 1;
 	}
 	const char *base = strrchr(argv[2], '/');
 	base = base ? base + 1 : argv[2];

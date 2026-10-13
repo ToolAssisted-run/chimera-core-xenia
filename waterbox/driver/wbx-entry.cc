@@ -142,6 +142,16 @@ CORE_EXPORT const char* CheckWatchedViews(void) {
   return report.c_str();
 }
 
+// For the core's own tests, with no game: see check_turns. The text ends
+// with "turns ok" when the thread that read the clock gave way.
+CORE_EXPORT const char* CheckTurns(void) {
+  static std::string report;
+  report.clear();
+  const bool good = chimera_xenia::check_turns(report);
+  report += good ? "turns ok\n" : "turns WRONG\n";
+  return report.c_str();
+}
+
 #ifdef CHIMERA_GUEST
 // The Vulkan bridge: the host's dispatcher, handed over before Init. Without
 // it there is no device in the sandbox and only the renderer that draws
