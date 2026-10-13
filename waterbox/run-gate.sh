@@ -410,6 +410,26 @@ else
 	fi
 fi
 
+# No randomness from the host. In the sandbox the standard library's random
+# device is the processor's own instruction for random numbers, which nothing
+# can stand in front of: a program that asked the console for random bytes
+# got other bytes in every run (The Beatles: Rock Band asks seven times before
+# its title screen, and two runs of one movie left different memory). The
+# console's random numbers are a fixed sequence of the machine's own now. The
+# check: no object of the sandbox build refers to the random device.
+if [ ! -d "$root/build/guest" ]; then
+	report "random:own" SKIP "no build/guest: run waterbox/build-guest.sh"
+else
+	users="$(find "$root/build/guest" -name '*.a' | sort | while read -r a; do
+		nm -CA "$a" 2> /dev/null | grep ' U std::random_device::' | cut -d: -f2
+	done | sort -u | tr '\n' ' ')"
+	if [ -z "$users" ]; then
+		report "random:own" PASS "no object of the sandbox build asks the host for random numbers"
+	else
+		report "random:own" FAIL "these ask the host's random device: $users"
+	fi
+fi
+
 # A game that is a container: one file with no extension, as Xbox Live
 # Arcade games are (issue 250). This repository has no such game, so one is
 # made from the disc image: tests/make-container.py puts the image's own

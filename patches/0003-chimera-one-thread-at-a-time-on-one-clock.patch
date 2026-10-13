@@ -282,10 +282,10 @@ index 000000000..563a386a3
 +#endif  // XENIA_BASE_CHIMERA_SYNC_H_
 diff --git a/src/xenia/base/chimera_vsched.h b/src/xenia/base/chimera_vsched.h
 new file mode 100644
-index 000000000..c77e03a76
+index 000000000..836ed7760
 --- /dev/null
 +++ b/src/xenia/base/chimera_vsched.h
-@@ -0,0 +1,86 @@
+@@ -0,0 +1,101 @@
 +// chimera: the one clock, and what moves it (threading_chimera.cc).
 +#ifndef XENIA_BASE_CHIMERA_VSCHED_H_
 +#define XENIA_BASE_CHIMERA_VSCHED_H_
@@ -360,6 +360,21 @@ index 000000000..c77e03a76
 +// The machine's time as a moment on the steady clock's scale: what everything
 +// that asked the host "what time is it" asks instead.
 +std::chrono::steady_clock::time_point SteadyNow();
++
++// The machine's random numbers: a fixed sequence, the same in every run and
++// carried in a savestate like the rest of the machine. It stands where the
++// host's random device was asked - which in a sandbox is the processor's own
++// instruction for randomness, that nothing can stand in front of. A program
++// that asked for sixteen random bytes got sixteen other bytes in every run
++// (chimera issue 258's game did, seven times before its title screen).
++inline uint64_t NextRandom() {
++  static uint64_t state = 0x58454E4941ull;
++  state += 0x9E3779B97F4A7C15ull;
++  uint64_t z = state;
++  z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
++  z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
++  return z ^ (z >> 31);
++}
 +
 +}  // namespace chimera
 +}  // namespace xe
@@ -2518,6 +2533,34 @@ index 6752e5675..9e8bdb364 100644
    std::list<std::function<void()>> dispatch_queue_;
  
    uint32_t ke_timestamp_bundle_ptr_ = 0;
+diff --git a/src/xenia/kernel/xam/profile_manager.h b/src/xenia/kernel/xam/profile_manager.h
+index 6d8825af2..752272d3b 100644
+--- a/src/xenia/kernel/xam/profile_manager.h
++++ b/src/xenia/kernel/xam/profile_manager.h
+@@ -16,6 +16,7 @@
+ #include <vector>
+ 
+ #include "third_party/fmt/include/fmt/format.h"
++#include "xenia/base/chimera_vsched.h"
+ #include "xenia/base/string.h"
+ #include "xenia/kernel/title_id_utils.h"
+ #include "xenia/kernel/xam/user_profile.h"
+@@ -46,10 +47,15 @@ inline const std::string kDashboardStringID =
+ constexpr std::string_view kDefaultMountFormat = "User_{:016X}";
+ 
+ const static inline uint64_t GenerateXuid() {
++#ifdef CHIMERA_VSCHED
++  // chimera: the machine's own sequence, not the host's randomness
++  return ((uint64_t)0xE03 << 52) + (xe::chimera::NextRandom() % (1 << 31));
++#else
+   std::random_device rd;
+   std::mt19937 gen(rd());
+ 
+   return ((uint64_t)0xE03 << 52) + (gen() % (1 << 31));
++#endif
+ }
+ 
+ class ProfileManager {
 diff --git a/src/xenia/kernel/xam/user_profile.h b/src/xenia/kernel/xam/user_profile.h
 index 1fa41047e..52cd5f06b 100644
 --- a/src/xenia/kernel/xam/user_profile.h
@@ -2539,6 +2582,39 @@ index 1fa41047e..52cd5f06b 100644
  
    std::map<XTileType, std::vector<uint8_t>> profile_images_;
  
+diff --git a/src/xenia/kernel/xam/xam_net.cc b/src/xenia/kernel/xam/xam_net.cc
+index bb2d6b9f0..3098af567 100644
+--- a/src/xenia/kernel/xam/xam_net.cc
++++ b/src/xenia/kernel/xam/xam_net.cc
+@@ -7,6 +7,7 @@
+  ******************************************************************************
+  */
+ 
++#include "xenia/base/chimera_vsched.h"
+ #include "xenia/base/logging.h"
+ #include "xenia/kernel/kernel_state.h"
+ #include "xenia/kernel/util/shim_utils.h"
+@@ -284,6 +285,12 @@ dword_result_t NetDll_XNetRandom_entry(dword_t caller, lpvoid_t buffer_ptr,
+     return X_ERROR_SUCCESS;
+   }
+ 
++#ifdef CHIMERA_VSCHED
++  // chimera: the machine's own sequence, not the host's randomness
++  for (uint32_t i = 0; i < length; i++) {
++    buffer_data_ptr[i] = static_cast<uint8_t>(xe::chimera::NextRandom() >> 32);
++  }
++#else
+   std::random_device rnd;
+   std::mt19937_64 gen(rnd());
+   std::uniform_int_distribution<int> dist(0,
+@@ -291,6 +298,7 @@ dword_result_t NetDll_XNetRandom_entry(dword_t caller, lpvoid_t buffer_ptr,
+ 
+   std::generate(buffer_data_ptr, buffer_data_ptr + length,
+                 [&]() { return static_cast<uint8_t>(dist(gen)); });
++#endif
+ 
+   return X_ERROR_SUCCESS;
+ }
 diff --git a/src/xenia/kernel/xevent.cc b/src/xenia/kernel/xevent.cc
 index 736a5b8a9..30f8e1eeb 100644
 --- a/src/xenia/kernel/xevent.cc
@@ -2899,7 +2975,7 @@ index 13a146f0f..9d16f1c17 100644
  };
  
 diff --git a/src/xenia/kernel/xthread.cc b/src/xenia/kernel/xthread.cc
-index 71643901d..884335db9 100644
+index 71643901d..07419eafd 100644
 --- a/src/xenia/kernel/xthread.cc
 +++ b/src/xenia/kernel/xthread.cc
 @@ -7,6 +7,7 @@
@@ -2919,7 +2995,23 @@ index 71643901d..884335db9 100644
    thread_name_ = fmt::format("{} ({:08X})", name, handle());
  
    if (thread_) {
-@@ -908,7 +909,7 @@ X_STATUS XThread::Resume(uint32_t* out_suspend_count) {
+@@ -402,7 +403,15 @@ X_STATUS XThread::Create() {
+   pcr->pcr_ptr = pcr_address_;
+   pcr->prcb_data.current_thread = guest_object();
+   pcr->prcb = pcr_address_ + offsetof(X_KPCR, prcb_data);
++#ifdef CHIMERA_VSCHED
++  // chimera: nothing reads this, and it is an address of the emulator's own
++  // in the console's memory - another one in a run that saved a state before
++  // the thread was made, so two runs of one movie did not leave the same
++  // memory.
++  pcr->host_stash = 0;
++#else
+   pcr->host_stash = reinterpret_cast<uint64_t>(thread_state_->context());
++#endif
+   pcr->stack_base_ptr = stack_base_;
+   pcr->stack_end_ptr = stack_limit_;
+ 
+@@ -908,7 +917,7 @@ X_STATUS XThread::Resume(uint32_t* out_suspend_count) {
    // Use mutex to protect suspend_count access and coordinate with SelfSuspend.
    bool should_resume_host = false;
    {
@@ -2928,7 +3020,7 @@ index 71643901d..884335db9 100644
      uint8_t previous = guest_thread->suspend_count;
      if (previous > 0) {
        guest_thread->suspend_count--;
-@@ -959,7 +960,7 @@ X_STATUS XThread::Suspend(uint32_t* out_suspend_count) {
+@@ -959,7 +968,7 @@ X_STATUS XThread::Suspend(uint32_t* out_suspend_count) {
  #if !XE_PLATFORM_WIN32
  uint32_t XThread::SelfSuspend() {
    auto guest_thread = guest_object<X_KTHREAD>();

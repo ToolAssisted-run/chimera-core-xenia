@@ -448,6 +448,17 @@ bool switch_on(const Options& options, std::string& error) {
   // standard output is the runners' and is left alone unless asked for.
   cvars::log_file = "chimera.log";
   cvars::log_to_stdout = options.log;
+  // What the console's memory holds must not depend on the card that draws.
+  // A program asks how many pixels of something were visible (an occlusion
+  // query) and the answer is written into its memory. Xenia's default asks
+  // the real card and writes the answer "when the GPU catches up": another
+  // number on another card, and another moment in another run - a run that
+  // only saved states was no longer the run that did not. So the answer is
+  // the made-up one, the same everywhere, with no renderer too. Nothing else
+  // the card draws is read back either: these two are Xenia's defaults, said
+  // here so that a change of default upstream cannot change the machine.
+  xe::gpu::SetZPDMode("fake");
+  xe::gpu::SetReadbackResolveMode("none");
   xe::chimera::g_trace_schedule = options.trace_schedule;
   xe::chimera::SetCosts(options.instruction_ps, options.yield_ns);
   xe::InitializeLogging("chimera");

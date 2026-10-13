@@ -1283,3 +1283,53 @@ that address is in the middle of an instruction of the core, so something
 had already gone wrong before it. It is taken to be the same fault ending
 another way on the reporter's machine; that is a guess until they try this
 build. Onechanbara was not tried: it is not here.
+
+
+## A run with a rewind is the run without one (2026-10-13)
+
+Asked by the owner after the same question found a fault in another core:
+does a movie played with a rewind in it leave the machine a straight run
+leaves? Measured on Windows on a GeForce GTX 1060 with Vulkan, by comparing
+all 4 GiB of the console's address space at the end of a run (`chimera-run
+--dump Memory=<file>` writes a fingerprint of every 64 KiB of it): a movie
+played straight, the same with a savestate taken every few hundred frames and
+never loaded, and the same with one rewind (back 500 to 700 frames, then on).
+
+It did not. Three separate things, each found from the bytes that differed:
+
+- **The card's answer written into memory.** A program asks how many pixels
+  of something were visible (an occlusion query) and the answer goes into
+  its memory. Xenia's default asks the real card and writes the answer "when
+  the GPU catches up". A run that only took savestates differed from a
+  straight one in the page of those answers (Mirror's Edge, 116 bytes), and
+  the answer would be another one on another card. The core now always
+  gives the made-up answer, which this file had said it did. Effects that
+  depend on the real count (lens flares, culling by visibility) follow the
+  made-up one.
+- **Random numbers from the host.** The Beatles: Rock Band asks the console
+  for 16 random bytes seven times before its title screen, and two straight
+  runs of one movie left different bytes. In the sandbox the standard
+  library's random device is the processor's own instruction for random
+  numbers, which miniBox cannot stand in front of. The console's random
+  numbers (`XNetRandom`, a new profile's id, heap scribbling) are now a
+  fixed sequence kept with the machine (`xe::chimera::NextRandom`).
+- **An address of the emulator's in the console's memory.** Each thread's
+  block held the host address of its register context. Nothing reads it,
+  and it was another address in a run that took a savestate before the
+  thread was made. It is now zero.
+
+**Measured after the three** (same card): Mirror's Edge over 1,500 frames
+and The Beatles: Rock Band over 2,400 - straight, straight again, with
+states taken, and with a rewind - leave the same 65,536 fingerprints, and
+the same picture at the last frame.
+
+New check `random:own`: no object of the sandbox build refers to the
+standard library's random device (seen to fail with one use put back). The
+other two have no check of their own: nothing in CI has a game, and the
+checks here that load a state before every frame run a stretch of Mirror's
+Edge that asks for none of the three.
+
+Every game's memory moves with this (the answers to queries and the random
+bytes are others), so a movie made with an earlier build will not play back.
+
+Not measured: a game in play rather than its opening, and any other card.
