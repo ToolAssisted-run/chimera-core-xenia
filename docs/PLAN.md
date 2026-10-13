@@ -1210,3 +1210,26 @@ never asks about a licence. That needs an Arcade game. Nor has a file with
 no extension been picked in Chimera's New Project window; only the headless
 runner has been given one.
 
+
+## An Arcade game could not be made into a project (2026-10-13, issue 250)
+
+The section before this one let the core start a game that is a container.
+A person still could not use one: the game slot declared `.iso` and nothing
+else, Chimera's New Project window said the file "is not one of the .iso
+this slot expects", and when the project was made the engine refused it -
+"file '...' is not a format slot 'game' accepts". An Arcade game has no
+extension. The reporter's screenshot is that window.
+
+It was missed because the two checks for containers run the core's own
+runner and `chimera-run <package> <file>`, and neither goes through a
+project: only a project's files are checked against the slot's formats.
+
+The slot now declares the empty format beside `iso`, which is a file with no
+extension (Chimera documents and shows it from dc0e8d0 on; engines before it
+already accept it). New check `project:container`: a project whose game is a
+file named like an Arcade game is opened by `chimera-run --project` and runs
+60 frames. Run by hand against the package published before this, the same
+steps end with the engine's refusal.
+
+Still not proved: a real Arcade game. The test container is made from a
+disc game's own program.

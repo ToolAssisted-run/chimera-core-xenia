@@ -7,9 +7,10 @@
       "min": 1,
       "max": 1,
       "formats": [
-        "iso"
+        "iso",
+        ""
       ],
-      "help": "The game: a disc image (.iso) of an Xbox 360 game disc, or an Xbox Live Arcade game. An Arcade game is one file with no extension and a long name of letters and digits, as it sits in the console's storage under Content/0000000000000000/<title>/000D0000: choose \"All files\" to see it, and never mind the note that it is not an .iso. Games on Demand (a small file beside a folder of data files) are not supported. The console's own system software is not needed: Xenia stands in for it. Xenia Canary's compatibility list (github.com/xenia-canary/game-compatibility) says which games work."
+      "help": "The game: a disc image (.iso) of an Xbox 360 game disc, or an Xbox Live Arcade game. An Arcade game is one file with no extension and a long name of letters and digits, as it sits in the console's storage under Content/0000000000000000/<title>/000D0000. Games on Demand (a small file beside a folder of data files) are not supported. The console's own system software is not needed: Xenia stands in for it. Xenia Canary's compatibility list (github.com/xenia-canary/game-compatibility) says which games work."
     }
   ]
 }

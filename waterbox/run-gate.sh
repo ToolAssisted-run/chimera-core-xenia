@@ -438,6 +438,31 @@ else
 		report "frontend:container" FAIL "full: exit $fc [$(tail -1 "$work/fc.out")]; trial: exit $fct [$(tail -1 "$work/fc-trial.out")]; a wrong value: exit $fcb [$(tail -1 "$work/fc-bad.out")]"
 	fi
 fi
+# And a PROJECT takes it, which is what a person makes in the New Project
+# window. The engine checks a project's file against the formats its slot
+# declares, and a game named on chimera-run's command line (the check above)
+# never goes through that. The slot used to declare .iso and nothing else, so
+# an Arcade game - a file with no extension - was refused when the project was
+# made: "file '...' is not a format slot 'game' accepts" (chimera issue 250).
+# The slot now declares the empty format too, which is a file with no
+# extension.
+if [ -z "$chimera_root" ] || [ ! -x "$engine" ] || [ ! -f "$package" ]; then
+	report "project:container" SKIP "set CHIMERA_ROOT to a Chimera checkout with build/meson-linux/chimera-run and the package (waterbox/build-package.sh -r <it>)"
+elif [ ! -s "$container" ]; then
+	report "project:container" SKIP "no test container (container:launch did not make one)"
+else
+	mkdir -p "$work/arcade"
+	arcade="$work/arcade/834312072F4985F9D33D0B9549FFAA32C505FDAD58"
+	cp "$container" "$arcade"
+	python3 "$here/tests/make-project.py" "$package" "$work/arcade.chimeraProject" "$arcade" --set=renderer=null --set=cpu_speed=4000 > "$work/pc-make.out" 2>&1
+	env -u DISPLAY "$engine" --project "$work/arcade.chimeraProject" "$package" --files "$work/arcade" --frames 60 --record "$work/pc.movie" > "$work/pc.out" 2>&1
+	pc=$?
+	if [ "$pc" = 0 ] && grep -q "^frames=60" "$work/pc.out"; then
+		report "project:container" PASS "a project whose game is a file with no extension is opened by chimera-run and runs its 60 frames"
+	else
+		report "project:container" FAIL "exit $pc [$(tail -1 "$work/pc.out")] $(tail -1 "$work/pc-make.out")"
+	fi
+fi
 
 echo
 echo "$ok ok, $failed failed, $skipped skipped"

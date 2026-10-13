@@ -27,8 +27,7 @@ savestates. Nothing else has been tested.
 
 A disc image (`.iso`) of a game you own, or an Xbox Live Arcade game: one
 file with no extension and a long name of letters and digits, as it sits in
-a console's storage under `Content/0000000000000000/<title>/000D0000`. In
-Chimera's New Project window choose "All files" to see such a file. No
+a console's storage under `Content/0000000000000000/<title>/000D0000`. No
 Arcade game has been tried yet (see Status), and Games on Demand, which are
 a small file beside a folder of data files, are not supported. The console's
 own system software is not needed. Xenia Canary's
