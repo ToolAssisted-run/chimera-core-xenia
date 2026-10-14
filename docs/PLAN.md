@@ -540,8 +540,10 @@ more to draw in the sandbox.
   no queue that can present.
 - **The picture read back** by the frame (`waterbox/driver`): when a frame
   ends, the presenter copies its image out through the device, and that is
-  what `GetVideoBgra` hands the frontend - 1280x720 here. `SetRenderingEnabled`
-  off skips the copy and nothing else.
+  what `GetVideoBgra` hands the frontend, at the size the game draws it:
+  1280x720 for most games, 1920x1080 for some (the package declares a
+  1920x1080 buffer; chimera issue 270). `SetRenderingEnabled` off skips the
+  copy and nothing else.
 - **The loader is the bridge** (patch 0009): in a guest there is no library
   to load, and `vkGetInstanceProcAddr` comes from the bridge's guest half
   (`chimera_vk_lookup`). `build-guest.sh` generates both halves from the
@@ -712,7 +714,7 @@ What the package declares:
   card (the name's ending is how a frontend knows to hand the card over), or
   "null", which draws nothing and needs no card - the same machine either
   way, so a movie made with one plays with the other;
-- a picture of 1280x720 at 60 Hz, sound at 48 kHz, a bus and no memory
+- a picture of up to 1920x1080, shown as 1280x720, at 60 Hz, sound at 48 kHz, a bus and no memory
   domain, and that its states survive a new graphics device.
 
 **The engine's half** is not in this repository. A frontend has to hand the

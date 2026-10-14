@@ -10,7 +10,8 @@
 # waterbox/build-ppc-tests.sh and waterbox/run-ppc-tests.sh (the reference).
 # The game legs need a disc image this repository does not have:
 # tests/roms/Mirrors Edge [NTSCU][NTSCJ].iso, or XENIA_TEST_GAME=<an image of
-# that game>.
+# that game>. One test needs a game that draws at 1920x1080:
+# XENIA_TEST_GAME_FULL_HD (see frontend:full-hd).
 set -u
 here="$(cd "$(dirname "$0")" && pwd)"
 root="$(cd "$here/.." && pwd)"
@@ -506,6 +507,39 @@ else
 		report "project:container" PASS "a project whose game is a file with no extension is opened by chimera-run and runs its 60 frames"
 	else
 		report "project:container" FAIL "exit $pc [$(tail -1 "$work/pc.out")] $(tail -1 "$work/pc-make.out")"
+	fi
+fi
+
+# A game that draws its picture at 1920x1080. The console tells every game
+# the television is 1280x720, and most draw at that size, but some draw at
+# 1920x1080 and let the console scale the picture down. The package declared
+# a 1280x720 picture until chimera issue 270, so the engine copied 1280x720
+# pixels out of a picture 1920 wide: two squeezed copies side by side, with
+# dark lines between. Here the picture chimera-run shows must be this
+# repository's runner's, size and pixels. The test needs such a game, which
+# this repository does not have: XENIA_TEST_GAME_FULL_HD=<DuckTales:
+# Remastered, the Arcade file 3BE5F89B69A86BECAFB4B11F87843D12649E1DF558>.
+hd_game="${XENIA_TEST_GAME_FULL_HD:-}"
+if [ -z "$chimera_root" ] || [ ! -x "$engine" ] || [ ! -f "$package" ]; then
+	report "frontend:full-hd" SKIP "set CHIMERA_ROOT to a Chimera checkout with build/meson-linux/chimera-run and the package (waterbox/build-package.sh -r <it>)"
+elif [ -z "$hd_game" ] || [ ! -f "$hd_game" ]; then
+	report "frontend:full-hd" SKIP "needs XENIA_TEST_GAME_FULL_HD=<a game that draws at 1920x1080: DuckTales: Remastered>"
+elif [ ! -x "$wbx/run-wbx" ] || [ ! -f "$wbx/core.wbx" ]; then
+	report "frontend:full-hd" SKIP "no build/wbx/core.wbx: run waterbox/build-guest.sh"
+else
+	: > "$work/empty.movie"
+	env -u DISPLAY "$engine" "$package" "$hd_game" "$work/empty.movie" --frames 100 --record "$work/hd.movie" \
+		--gpu --settings '{"cpu_speed":"4000"}' --screenshot "80=$work/hd.tga" > "$work/hd.out" 2>&1
+	hd=$?
+	# the engine counts frames from 0, the runner from 1
+	"$wbx/run-wbx" "$wbx/core.wbx" "$hd_game" --instruction-ps "$cost_fast" --frames 81 --renderer vulkan --ppm "$work/hd.ppm" > "$work/hd-wbx.out" 2> "$work/hd-wbx.err"
+	verdict="$(python3 "$same" "$work/hd.tga" "$work/hd.ppm" 2>&1)"; same_rc=$?
+	if grep -q "no Vulkan on this machine" "$work/hd.out"; then
+		report "frontend:full-hd" SKIP "no Vulkan on this machine"
+	elif [ "$hd" = 0 ] && [ "$same_rc" = 0 ] && [ "${verdict#same 1920x1080}" != "$verdict" ]; then
+		report "frontend:full-hd" PASS "a game that draws at 1920x1080: chimera-run's picture at frame 80 is this repository's runner's ($verdict)"
+	else
+		report "frontend:full-hd" FAIL "chimera-run exit $hd; pictures: $verdict; $(tail -1 "$work/hd.out")"
 	fi
 fi
 
