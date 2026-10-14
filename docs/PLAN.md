@@ -1397,3 +1397,21 @@ is now a sleep for its timeout on the machine's clock, and with no timeout
 it never ends (patch 0003, NetDll_select). The test `net:own` checks that no
 part of the sandbox build calls the computer's select or poll. The game now
 runs past its logos; the rest of it has not been played.
+
+## Memory asked for aligned (2026-10-14, chimera #272)
+
+Ultimate Marvel vs. Capcom 3 and Marvel vs. Capcom 3 crashed within their
+first frames, writing to address 0. Just before, MmAllocatePhysicalMemoryEx
+had failed three times: "translated address F6A67000 misaligned (alignment
+00002000, physical base offset 00001000)". The console's 0xE0000000 view of
+its memory starts one page into physical memory, so memory aligned in
+physical memory is one page off in that view. Xenia's test adds a host
+offset that is one page only where the host hands out memory in blocks
+larger than a page (Windows); the sandbox hands it out by the page, so every
+aligned request in that view was refused, and the game wrote to the 0 it got
+back. The three tests now ask what the console guarantees, that the
+physical address is aligned (patch 0006). `memory:views` asks each of the
+three views for memory aligned to 8 and 64 KiB, in a range and anywhere; it
+failed at 0xE0000000 before. Ultimate Marvel vs. Capcom 3 now runs 1,200
+frames in the sandbox with picture and sound; nothing past its opening was
+played.

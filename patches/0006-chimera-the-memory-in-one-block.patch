@@ -398,7 +398,7 @@ index 0e0370526..819183d71 100644
      /*
          we want our register which points to the context to have 0xE0000000 in
 diff --git a/src/xenia/memory.cc b/src/xenia/memory.cc
-index 706bd4809..85abbc7e6 100644
+index 706bd4809..7bd36c7b5 100644
 --- a/src/xenia/memory.cc
 +++ b/src/xenia/memory.cc
 @@ -7,6 +7,7 @@
@@ -587,7 +587,52 @@ index 706bd4809..85abbc7e6 100644
              xe_page_size, host_access, nullptr);
        }
  
-@@ -2084,7 +2191,8 @@ template <bool enable_invalidation_notifications, bool enable_data_providers>
+@@ -1836,7 +1943,13 @@ bool PhysicalHeap::Alloc(uint32_t size, uint32_t alignment,
+   // Given the address we've reserved in the parent heap, pin that here.
+   // Shouldn't be possible for it to be allocated already.
+   const uint32_t address = heap_base_ + parent_address - parent_heap_start;
+-  if ((address + host_address_offset_) % alignment != 0) {
++  // chimera: what must be aligned is the console's physical address. The
++  // 0xE0000000 range starts 0x1000 into physical memory, and upstream's
++  // test (address + host_address_offset_) only says so on a host whose
++  // allocation granularity is above 4 KiB (Windows). The sandbox's is 4 KiB,
++  // so every aligned allocation there was refused (chimera issue 272).
++  if ((address - heap_base_ + GetPhysicalAddress(heap_base_)) % alignment !=
++      0) {
+     XELOGE(
+         "PhysicalHeap::Alloc translated address {:08X} misaligned "
+         "(alignment {:08X}, physical base offset {:08X})",
+@@ -1881,7 +1994,13 @@ bool PhysicalHeap::AllocFixed(uint32_t base_address, uint32_t size,
+   // Shouldn't be possible for it to be allocated already.
+   const uint32_t address =
+       heap_base_ + parent_base_address - GetPhysicalAddress(heap_base_);
+-  if ((address + host_address_offset_) % alignment != 0) {
++  // chimera: what must be aligned is the console's physical address. The
++  // 0xE0000000 range starts 0x1000 into physical memory, and upstream's
++  // test (address + host_address_offset_) only says so on a host whose
++  // allocation granularity is above 4 KiB (Windows). The sandbox's is 4 KiB,
++  // so every aligned allocation there was refused (chimera issue 272).
++  if ((address - heap_base_ + GetPhysicalAddress(heap_base_)) % alignment !=
++      0) {
+     XELOGE(
+         "PhysicalHeap::AllocFixed translated address {:08X} misaligned "
+         "(alignment {:08X}, physical base offset {:08X})",
+@@ -1933,7 +2052,13 @@ bool PhysicalHeap::AllocRange(uint32_t low_address, uint32_t high_address,
+   // Shouldn't be possible for it to be allocated already.
+   const uint32_t address =
+       heap_base_ + parent_address - GetPhysicalAddress(heap_base_);
+-  if ((address + host_address_offset_) % alignment != 0) {
++  // chimera: what must be aligned is the console's physical address. The
++  // 0xE0000000 range starts 0x1000 into physical memory, and upstream's
++  // test (address + host_address_offset_) only says so on a host whose
++  // allocation granularity is above 4 KiB (Windows). The sandbox's is 4 KiB,
++  // so every aligned allocation there was refused (chimera issue 272).
++  if ((address - heap_base_ + GetPhysicalAddress(heap_base_)) % alignment !=
++      0) {
+     XELOGE(
+         "PhysicalHeap::AllocRange translated address {:08X} misaligned "
+         "(alignment {:08X}, physical base offset {:08X})",
+@@ -2084,7 +2209,8 @@ template <bool enable_invalidation_notifications, bool enable_data_providers>
  XE_NOINLINE void PhysicalHeap::EnableAccessCallbacksInner(
      const uint32_t system_page_first, const uint32_t system_page_last,
      xe::memory::PageAccess protect_access) XE_RESTRICT {
@@ -597,7 +642,7 @@ index 706bd4809..85abbc7e6 100644
    uint32_t protect_system_page_first = UINT32_MAX;
  
    SystemPageFlagsBlock* XE_RESTRICT sys_page_flags = system_page_flags_.data();
-@@ -2250,7 +2358,8 @@ bool PhysicalHeap::TriggerCallbacks(
+@@ -2250,7 +2376,8 @@ bool PhysicalHeap::TriggerCallbacks(
      // read-only if it also has a write watch, otherwise restore the guest
      // protection. Then clear the read watch.
      if (unprotect) {
@@ -607,7 +652,7 @@ index 706bd4809..85abbc7e6 100644
        for (uint32_t i = system_page_first; i <= system_page_last; ++i) {
          uint64_t bit = uint64_t(1) << (i & 63);
          SystemPageFlagsBlock& flags = system_page_flags_[i >> 6];
-@@ -2376,7 +2485,8 @@ bool PhysicalHeap::TriggerCallbacks(
+@@ -2376,7 +2503,8 @@ bool PhysicalHeap::TriggerCallbacks(
  
    // Unprotect ranges that need unprotection.
    if (unprotect) {

@@ -817,6 +817,30 @@ bool check_watched_views(std::string& report) {
     heap->Release(address);
   }
   memory->UnregisterPhysicalMemoryInvalidationCallback(handle);
+  // Memory a game asks for aligned (MmAllocatePhysicalMemoryEx, which takes
+  // a range, and an allocation anywhere in a heap): the console aligns the
+  // physical address, and the 0xE0000000 view starts a page into physical
+  // memory. Each heap must give it (chimera issue 272: every aligned
+  // allocation in the 0xE0000000 view was refused, and Marvel vs. Capcom 3
+  // wrote to the 0 it was handed).
+  for (const uint32_t base : bases) {
+    auto* heap = static_cast<xe::PhysicalHeap*>(memory->LookupHeap(base));
+    for (const uint32_t alignment : {0x2000u, 0x10000u}) {
+      uint32_t ranged = 0, anywhere = 0;
+      const uint32_t flags = xe::kMemoryAllocationReserve | xe::kMemoryAllocationCommit;
+      const uint32_t protect = xe::kMemoryProtectRead | xe::kMemoryProtectWrite;
+      const bool got_ranged = heap->AllocRange(base, base + 0x1FFFFFFFu, 0x20000, alignment, flags, protect, true, &ranged);
+      const bool got_anywhere = heap->Alloc(0x20000, alignment, flags, protect, true, &anywhere);
+      const bool fine = got_ranged && got_anywhere && memory->GetPhysicalAddress(ranged) % alignment == 0 &&
+                        memory->GetPhysicalAddress(anywhere) % alignment == 0;
+      std::snprintf(line, sizeof line, "aligned to %05X at %08X: %s (in a range %08X, anywhere %08X)\n", alignment, base,
+                    fine ? "ok" : "WRONG", ranged, anywhere);
+      report += line;
+      good = good && fine;
+      if (got_ranged) heap->Release(ranged);
+      if (got_anywhere) heap->Release(anywhere);
+    }
+  }
   return good;
 }
 

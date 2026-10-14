@@ -372,7 +372,10 @@ fi
 # watches it, and each is written through all three addresses. Every write
 # must land and be told of once, natively and in the sandbox alike. (Before
 # the fix a write to a page allocated at 0xC0000000 or 0xE0000000 ended the
-# core: issue 249.)
+# core: issue 249.) And memory asked for aligned to 8 and 64 KiB is given in
+# each of the three places, both ways a game asks for it, with its physical
+# address aligned (issue 272: none was given at 0xE0000000, and Marvel vs.
+# Capcom 3 wrote to the 0 it got back).
 if [ ! -x "$run" ]; then
 	report "memory:views" SKIP "no build/vsched/bin/Linux/run-frames: run waterbox/build-native.sh"
 elif [ ! -x "$wbx/run-wbx" ] || [ ! -f "$wbx/core.wbx" ]; then
@@ -380,9 +383,10 @@ elif [ ! -x "$wbx/run-wbx" ] || [ ! -f "$wbx/core.wbx" ]; then
 else
 	timeout 300 "$run" --check-views "$work/views-work" > "$work/views-native.out" 2> "$work/views-native.err"
 	timeout 300 "$wbx/run-wbx" "$wbx/core.wbx" --check-views > "$work/views-sandbox.out" 2> "$work/views-sandbox.err"
-	writes="$(grep -c ': ok ' "$work/views-sandbox.out")"
-	if [ "$(tail -1 "$work/views-native.out")" = "views ok" ] && cmp -s "$work/views-native.out" "$work/views-sandbox.out" && [ "$writes" -eq 9 ]; then
-		report "memory:views" PASS "$writes writes to a watched page, through each of its three addresses, land and are told of once - natively and in the sandbox"
+	writes="$(grep -c 'written at .*: ok ' "$work/views-sandbox.out")"
+	aligned="$(grep -c '^aligned to .*: ok ' "$work/views-sandbox.out")"
+	if [ "$(tail -1 "$work/views-native.out")" = "views ok" ] && cmp -s "$work/views-native.out" "$work/views-sandbox.out" && [ "$writes" -eq 9 ] && [ "$aligned" -eq 6 ]; then
+		report "memory:views" PASS "$writes writes to a watched page, through each of its three addresses, land and are told of once; $aligned aligned allocations are given - natively and in the sandbox"
 	else
 		report "memory:views" FAIL "native [$(tail -1 "$work/views-native.out")] sandbox [$(tail -1 "$work/views-sandbox.out")]"
 	fi
