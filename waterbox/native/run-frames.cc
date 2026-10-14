@@ -42,6 +42,7 @@ void StateSaving(void);
 uint32_t* GetVideoBgra(void);
 int GetVideoWidth(void);
 int GetVideoHeight(void);
+int InsertDisc(int32_t);
 const char* CheckWatchedViews(void);
 const char* CheckTurns(void);
 }
@@ -90,6 +91,7 @@ int main(int argc, char** argv) {
   char settings[256];
   harness_settings(&o, settings, sizeof settings);
   char slots[4096];
+  o.game = program;
   harness_slots(&o, [](const char* path) { return path; }, slots, sizeof slots);
   if (!write_file("rom.name", program) || !write_file("settings", settings) || !write_file("slots", slots)) {
     std::fprintf(stderr, "run-frames: cannot write into %s\n", argv[2]);
@@ -98,7 +100,7 @@ int main(int argc, char** argv) {
   const struct harness_core core = {
       Init,          GetLoadError,        SetAxis,          FrameAdvance,   InputWasRead,       GetAudio,
       GetAudioSampleCount, GetMachineTimeNs, GetSwitchCount, GetInstructionCount, DebugInstructionsByThread, GetGpuCounter, GetRamDigest, ReadBus, RemakeRenderer, StateSaving,
-      GetVideoBgra,  GetVideoWidth,       GetVideoHeight,
+      GetVideoBgra,  GetVideoWidth,       GetVideoHeight, InsertDisc,
       nullptr,       nullptr,             nullptr,
   };
   const int result = harness_run(&core, &o);

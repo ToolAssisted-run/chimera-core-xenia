@@ -756,6 +756,10 @@ bool boot(const std::string& program, const Options& options, std::string& error
       return false;
     }
   }
+  m.emulator->chimera_discs.push_back(program);
+  for (const std::string& disc : options.discs) {
+    m.emulator->chimera_discs.push_back(disc);
+  }
   // The first licence bit is what an Arcade game reads as "bought". A disc
   // game that asks is answered with none, as before there was this setting.
   cvars::license_mask = is_container(program) && options.arcade_bought ? 1 : 0;
@@ -768,6 +772,8 @@ bool boot(const std::string& program, const Options& options, std::string& error
   }
   return true;
 }
+
+bool insert_disc(uint32_t n) { return g_machine && XSUCCEEDED(g_machine->emulator->ChimeraInsertDisc(n)); }
 
 void set_pad(int port, uint16_t buttons, const int32_t* axes) {
   if (!g_machine || port < 0 || port >= PORTS) {

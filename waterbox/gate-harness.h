@@ -23,6 +23,8 @@
  *                   new device, as it is after a load
  * --ppm FILE [--ppm-at F]    the picture after frame F (the last one without
  *                   --ppm-at), as a file a person can look at
+ * --disc FILE       the game's next disc (up to three, in order)
+ * --insert-disc F:N after frame F, put disc N in as the game would ask
  * --content FILE    a package for the Content slot (up to eight)
  * --savedata FILE   a zip for the Save data slot
  */
@@ -56,6 +58,7 @@ struct harness_core {
 	uint32_t *(*GetVideoBgra)(void);
 	int (*GetVideoWidth)(void);
 	int (*GetVideoHeight)(void);
+	int (*InsertDisc)(int32_t);
 	/* the sandbox's; null natively */
 	int (*seal)(void);
 	int (*save)(uint8_t **buf, size_t *len);
@@ -68,9 +71,13 @@ struct harness_opts {
 	uint64_t frames, every, save_at, remake_every;
 	int rerecord, log, pads, trace_schedule, pace;
 	long long instruction_ps, yield_ns;
-	const char *renderer, *save_state, *state, *ppm, *savedata;
+	const char *renderer, *save_state, *state, *ppm, *savedata, *game;
 	const char *content[8];
 	int contents;
+	const char *disc[3];
+	int discs;
+	uint64_t insert_at;
+	int insert_disc;
 	uint64_t ppm_at;
 	struct harness_event press[HARNESS_MAX_EVENTS], axis[HARNESS_MAX_EVENTS];
 	int presses, axes;
@@ -80,7 +87,15 @@ struct harness_opts {
  * by name(path) - the path natively, the mounted name in the sandbox. */
 static void harness_slots(const struct harness_opts *o, const char *(*name)(const char *), char *out, size_t size)
 {
-	size_t n = (size_t)snprintf(out, size, "{\"content\": [");
+	size_t n = 0;
+	if (o->discs) {
+		n += (size_t)snprintf(out, size, "{\"game\": [\"%s\"", name(o->game));
+		for (int i = 0; i < o->discs && n < size; i++)
+			n += (size_t)snprintf(out + n, size - n, ", \"%s\"", name(o->disc[i]));
+		if (n < size)
+			n += (size_t)snprintf(out + n, size - n, "], \"content\": [");
+	} else
+		n = (size_t)snprintf(out, size, "{\"content\": [");
 	for (int i = 0; i < o->contents && n < size; i++)
 		n += (size_t)snprintf(out + n, size - n, "%s\"%s\"", i ? ", " : "", name(o->content[i]));
 	if (n < size)
@@ -119,6 +134,15 @@ static int harness_parse(int argc, char **argv, int first, struct harness_opts *
 		else if (!strcmp(a, "--state")) o->state = v;
 		else if (!strcmp(a, "--ppm")) o->ppm = v;
 		else if (!strcmp(a, "--savedata")) o->savedata = v;
+		else if (!strcmp(a, "--insert-disc")) {
+			if (sscanf(v, "%" SCNu64 ":%d", &o->insert_at, &o->insert_disc) != 2) {
+				fprintf(stderr, "--insert-disc wants <frame>:<disc>, not %s\n", v);
+				return 0;
+			}
+		} else if (!strcmp(a, "--disc")) {
+			if (o->discs == 3) { fprintf(stderr, "--disc: three at most\n"); return 0; }
+			o->disc[o->discs++] = v;
+		}
 		else if (!strcmp(a, "--content")) {
 			if (o->contents == 8) { fprintf(stderr, "--content: eight at most\n"); return 0; }
 			o->content[o->contents++] = v;
@@ -300,6 +324,9 @@ static int harness_run(const struct harness_core *c, const struct harness_opts *
 			c->SetAxis(i, axes[i]);
 		c->FrameAdvance(buttons);
 		s.frame = f;
+		if (o->insert_disc && f == o->insert_at)
+			printf("disc %d after frame %" PRIu64 ": %s\n", o->insert_disc, f,
+			       c->InsertDisc(o->insert_disc) ? "in" : "not put in");
 		s.input_frames += c->InputWasRead() ? 1 : 0;
 		const int pairs = c->GetAudioSampleCount();
 		if (pairs > 0) {

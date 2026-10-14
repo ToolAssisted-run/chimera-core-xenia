@@ -2063,6 +2063,24 @@ index 29c885add..1444a5d3d 100644
      return Clock::QueryGuestTickCount();
    }
  };
+diff --git a/src/xenia/emulator.h b/src/xenia/emulator.h
+index 9d5e92e4c..be7c0cbad 100644
+--- a/src/xenia/emulator.h
++++ b/src/xenia/emulator.h
+@@ -307,6 +307,13 @@ class Emulator {
+ 
+   // The game can request another title to be loaded.
+   const std::filesystem::path GetNewDiscPath(std::string window_message = "");
++#ifdef CHIMERA_VSCHED
++  // chimera: a game on several discs is one project with every disc, in
++  // order. When the game asks for disc N (XamSwapDisc) it is put in from
++  // here, where upstream asks a person to pick a file (chimera issue 281).
++  std::vector<std::filesystem::path> chimera_discs;
++  X_STATUS ChimeraInsertDisc(uint32_t disc_number);
++#endif
+   // Builds and runs the picker itself. UI thread only.
+   const std::filesystem::path ShowDiscPicker(std::string window_message);
+ 
 diff --git a/src/xenia/gpu/graphics_system.cc b/src/xenia/gpu/graphics_system.cc
 index f4f4a157d..bffede44c 100644
 --- a/src/xenia/gpu/graphics_system.cc
@@ -2581,6 +2599,25 @@ index 1fa41047e..52cd5f06b 100644
 +  xe::sync::mutex prop_mutex;              // 5841089C
  
    std::map<XTileType, std::vector<uint8_t>> profile_images_;
+ 
+diff --git a/src/xenia/kernel/xam/xam_content.cc b/src/xenia/kernel/xam/xam_content.cc
+index 9ed9f97d8..df8a18a17 100644
+--- a/src/xenia/kernel/xam/xam_content.cc
++++ b/src/xenia/kernel/xam/xam_content.cc
+@@ -777,6 +777,14 @@ dword_result_t XamSwapDisc_entry(
+     return X_ERROR_SUCCESS;
+   }
+ 
++#ifdef CHIMERA_VSCHED
++  // chimera: the disc comes from the project; a disc it does not have is
++  // never put in, and the game is told it was (as upstream does when the
++  // picker is cancelled)
++  kernel_state()->emulator()->ChimeraInsertDisc(disc_number);
++  completion_event();
++  return X_ERROR_SUCCESS;
++#endif
+   auto filesystem = kernel_state()->file_system();
+   auto mount_path = "\\Device\\LauncherData";
  
 diff --git a/src/xenia/kernel/xam/xam_net.cc b/src/xenia/kernel/xam/xam_net.cc
 index bb2d6b9f0..e92a8300b 100644

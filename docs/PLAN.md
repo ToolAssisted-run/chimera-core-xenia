@@ -1446,3 +1446,24 @@ not exported, and a zip holding anything outside `content/` refused. With
 the add-on content the owner gave (Mirror's Edge, "Pure Time Trials"), the
 console lists it under the game's title in both runners. Whether a game then
 offers the content it finds was not played.
+
+## A game on several discs (2026-10-14, chimera #281)
+
+The Game slot takes up to four discs, in order. The first is started. When
+the game asks for another (XamSwapDisc), upstream asks a person to pick a
+file; here the core puts in the project's disc of that number
+(`Emulator::ChimeraInsertDisc`, patch 0002 and 0003), at
+`\Device\LauncherData` as upstream does. A disc the project does not have is
+not put in and the log says so, and the game is told it was done, as
+upstream tells it when the picker is cancelled. The machine's devices are in
+its memory, so a savestate made after the swap has the second disc in.
+
+The slot's list is now read name by name: a file name with a bracket in it
+("Mirrors Edge [NTSCU][NTSCJ].iso") ended the list early, which would also
+have dropped Content packages after such a name.
+
+Test `disc:insert`: the test disc given twice, and the runners put disc 2 in
+after frame 10 the way the game's request does (their new `--disc` and
+`--insert-disc`); natively and in the sandbox the run carries on with the
+same lines, and a disc 3 the project lacks is not put in. No game on two
+discs was tried: the request itself, from a game, was not seen.

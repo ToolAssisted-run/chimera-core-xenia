@@ -35,6 +35,9 @@ own system software is not needed. Xenia Canary's
 [compatibility list](https://github.com/xenia-canary/game-compatibility)
 says which games work in Xenia itself.
 
+A game on several discs takes every disc in the Game slot, in order: the
+first is started, and the others are put in when the game asks for them.
+
 Besides the game, a project can hold **Content**: add-on content (DLC),
 title updates and saved games, each one package file as a console keeps it,
 put in the console's storage before the game starts as standalone Xenia's

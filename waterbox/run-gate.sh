@@ -564,6 +564,32 @@ else
 		report "content:install" FAIL "native [$(grep -o 'chimera: .*' "$work/ad-native.out" | tail -1)] sandbox [$(grep -o 'chimera: .*' "$work/ad-sandbox.out" | tail -1)] wrong kind: exit $aw [$(tail -1 "$work/ad-wrong.out")]"
 	fi
 fi
+# A game on several discs (chimera issue 281): the project holds every disc
+# in order, and when the game asks for disc N (XamSwapDisc) the core puts
+# that disc in where standalone Xenia asks a person to pick a file. With no
+# game on two discs here, the test disc is given twice and the runners put
+# disc 2 in after frame 10 the way the game's request does; natively and in
+# the sandbox the run carries on and both say it is in. A disc the project
+# does not have is not put in.
+if [ "$have_native" = 0 ]; then
+	report "disc:insert" SKIP "$why_native"
+elif [ "$have_sandbox" = 0 ]; then
+	report "disc:insert" SKIP "$why_sandbox"
+else
+	mkdir -p "$work/discs"
+	ln -sf "$game" "$work/discs/second.iso"
+	"$run" "$game" "$work/di-work" --instruction-ps "$cost_fast" --frames 30 --every 10 --disc "$work/discs/second.iso" --insert-disc 10:2 > "$work/di-native.out" 2>&1
+	"$wbx/run-wbx" "$wbx/core.wbx" "$game" --instruction-ps "$cost_fast" --frames 30 --every 10 --disc "$work/discs/second.iso" --insert-disc 10:2 > "$work/di-sandbox.out" 2>&1
+	"$run" "$game" "$work/dx-work" --instruction-ps "$cost_fast" --frames 15 --disc "$work/discs/second.iso" --insert-disc 10:3 > "$work/dx-native.out" 2>&1
+	grep -E '^(at|end) frame|^disc ' "$work/di-native.out" > "$work/di-native.lines"
+	grep -E '^(at|end) frame|^disc ' "$work/di-sandbox.out" > "$work/di-sandbox.lines"
+	if grep -q "^disc 2 after frame 10: in" "$work/di-native.lines" && grep -q "^end frame=30 " "$work/di-native.lines" &&
+		cmp -s "$work/di-native.lines" "$work/di-sandbox.lines" && grep -q "^disc 3 after frame 10: not put in" "$work/dx-native.out"; then
+		report "disc:insert" PASS "the project's disc 2 is put in after frame 10 as the game's request does, and the run carries on, the same natively and in the sandbox; a disc 3 the project does not have is not put in"
+	else
+		report "disc:insert" FAIL "native [$(grep '^disc' "$work/di-native.out")] sandbox [$(grep '^disc' "$work/di-sandbox.out")] disc 3 [$(grep '^disc' "$work/dx-native.out")] $(tail -1 "$work/di-sandbox.out")"
+	fi
+fi
 # And the Save data slot through the frontend's engine: a zip as Emulator >
 # Export Save Data writes it goes back into the storage before the game
 # starts, and the next export has it, byte for byte. A zip holding anything

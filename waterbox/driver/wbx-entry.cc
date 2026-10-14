@@ -111,10 +111,13 @@ std::vector<std::string> slot_all(const std::string& slots, const char* id) {
     return out;
   }
   size_t i = slots.find('[', at + k.size());
-  const size_t close = i == std::string::npos ? i : slots.find(']', i);
-  while (i != std::string::npos && i < close) {
-    i = slots.find('"', i + 1);
-    if (i == std::string::npos || i > close) {
+  if (i == std::string::npos) {
+    return out;
+  }
+  // string after string: a name may hold brackets and commas of its own
+  for (i++; i < slots.size();) {
+    i = slots.find_first_not_of(" \t\r\n,", i);
+    if (i == std::string::npos || slots[i] != '"') {
       break;
     }
     std::string name;
@@ -126,7 +129,7 @@ std::vector<std::string> slot_all(const std::string& slots, const char* id) {
       name += slots[j];
     }
     out.push_back(name);
-    i = j;
+    i = j + 1;
   }
   return out;
 }
@@ -190,6 +193,9 @@ CORE_EXPORT void SetVulkanBridge(uint64_t addr) {
 }
 #endif
 
+// For the core's own tests: put disc n in, as the game does when it asks.
+CORE_EXPORT int InsertDisc(int32_t n) { return chimera_xenia::insert_disc(static_cast<uint32_t>(n)) ? 1 : 0; }
+
 CORE_EXPORT int Init(void) {
   const std::string slots = read_file("slots");
   std::string name = mounted(slot_first(slots, "game"));
@@ -251,6 +257,11 @@ CORE_EXPORT int Init(void) {
     options.content.push_back(mounted(package));
   }
   options.savedata = mounted(slot_first(slots, "savedata"));
+  // the game slot's later files are the game's other discs, in order
+  const std::vector<std::string> discs = slot_all(slots, "game");
+  for (size_t i = 1; i < discs.size(); i++) {
+    options.discs.push_back(mounted(discs[i]));
+  }
   if (options.renderer == "vulkan" && !g_bridge) {
     g_error = "the Vulkan renderer needs a device, and none was handed over. Either this machine has no Vulkan, or "
               "this Chimera is older than this core: its Vulkan bridge has fewer commands than the core was built "

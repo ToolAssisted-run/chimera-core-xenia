@@ -43,7 +43,14 @@ struct Options {
   // The console's storage as Emulator > Export Save Data wrote it: a zip of
   // content/... (the Save data slot), or "".
   std::string savedata;
+  // A game on several discs: every disc after the first, in order. The game
+  // asks for one by its number (chimera issue 281).
+  std::vector<std::string> discs;
 };
+
+// Put disc n (the first is 1) in, as the game does when it asks for it. For
+// the core's own tests; false when the project has no such disc.
+bool insert_disc(uint32_t n);
 
 // Switch the machine on with a program in it. False with the reason in error.
 bool boot(const std::string& program, const Options& options, std::string& error);

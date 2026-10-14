@@ -195,8 +195,8 @@ int main(int argc, char **argv)
 	mount_text("rom.name", base);
 	mount_text("settings", settings);
 	/* the files besides the game, each mounted under its own name */
-	for (int i = 0; i <= o.contents; i++) {
-		const char *path = i < o.contents ? o.content[i] : o.savedata;
+	for (int i = 0; i <= o.contents + o.discs; i++) {
+		const char *path = i < o.contents ? o.content[i] : i < o.contents + o.discs ? o.disc[i - o.contents] : o.savedata;
 		if (!path)
 			continue;
 		wbx_mount_file_path(g_host, base_of(path), path, &r);
@@ -206,6 +206,7 @@ int main(int argc, char **argv)
 		}
 	}
 	char slots[4096];
+	o.game = argv[2];
 	harness_slots(&o, base_of, slots, sizeof slots);
 	mount_text("slots", slots);
 
@@ -253,6 +254,7 @@ int main(int argc, char **argv)
 		(uint32_t *(*)(void))proc("GetVideoBgra"),
 		(int (*)(void))proc("GetVideoWidth"),
 		(int (*)(void))proc("GetVideoHeight"),
+		(int (*)(int32_t))proc("InsertDisc"),
 		do_seal, do_save, do_load,
 	};
 	const int result = harness_run(&core, &o);
