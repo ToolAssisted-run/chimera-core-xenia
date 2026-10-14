@@ -2583,7 +2583,7 @@ index 1fa41047e..52cd5f06b 100644
    std::map<XTileType, std::vector<uint8_t>> profile_images_;
  
 diff --git a/src/xenia/kernel/xam/xam_net.cc b/src/xenia/kernel/xam/xam_net.cc
-index bb2d6b9f0..3098af567 100644
+index bb2d6b9f0..e92a8300b 100644
 --- a/src/xenia/kernel/xam/xam_net.cc
 +++ b/src/xenia/kernel/xam/xam_net.cc
 @@ -7,6 +7,7 @@
@@ -2615,6 +2615,43 @@ index bb2d6b9f0..3098af567 100644
  
    return X_ERROR_SUCCESS;
  }
+@@ -1009,6 +1017,28 @@ int_result_t NetDll_select_entry(dword_t caller, dword_t nfds,
+                                  pointer_t<x_fd_set> writefds,
+                                  pointer_t<x_fd_set> exceptfds,
+                                  lpvoid_t timeout_ptr) {
++#ifdef CHIMERA_VSCHED
++  // chimera: the machine has no network, so no socket is ever made (the
++  // sandbox refuses the host's) and none is ever ready. A select is a wait
++  // for its timeout, on the machine's clock; with no timeout it waits for
++  // ever, as it would for sockets that never become ready. The host's select
++  // is not the sandbox's to give (chimera issue 269: Dead Rising 2: Case Zero
++  // stopped on it).
++  if (readfds) readfds->fd_count = 0;
++  if (writefds) writefds->fd_count = 0;
++  if (exceptfds) exceptfds->fd_count = 0;
++  if (!timeout_ptr) {
++    for (;;) {
++      xe::threading::Sleep(std::chrono::seconds(1));
++    }
++  }
++  int32_t seconds = static_cast<int32_t>(timeout_ptr.as_array<int32_t>()[0]);
++  int32_t microseconds = static_cast<int32_t>(timeout_ptr.as_array<int32_t>()[1]);
++  Clock::ScaleGuestDurationTimeval(&seconds, &microseconds);
++  xe::threading::Sleep(std::chrono::microseconds(
++      std::max<int64_t>(int64_t(seconds) * 1000000 + microseconds, 0)));
++  return 0;
++#else
+   host_set host_readfds = {0};
+   fd_set native_readfds = {0};
+   if (readfds) {
+@@ -1055,6 +1085,7 @@ int_result_t NetDll_select_entry(dword_t caller, dword_t nfds,
+ 
+   // TODO(gibbed): modify ret to be what's actually copied to the guest fd_sets?
+   return ret;
++#endif
+ }
+ DECLARE_XAM_EXPORT1(NetDll_select, kNetworking, kImplemented);
+ 
 diff --git a/src/xenia/kernel/xevent.cc b/src/xenia/kernel/xevent.cc
 index 736a5b8a9..30f8e1eeb 100644
 --- a/src/xenia/kernel/xevent.cc

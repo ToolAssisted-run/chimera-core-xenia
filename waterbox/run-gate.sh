@@ -432,6 +432,25 @@ else
 	fi
 fi
 
+# No waiting on the host's network. The machine has no network: the sandbox
+# refuses to make a socket, so the console's sockets are never made, and a
+# wait for one to be ready is a wait on the machine's clock. Xenia asked the
+# host's select for it, which the sandbox does not provide, and the machine
+# stopped (chimera issue 269: Dead Rising 2: Case Zero at its first menu).
+# The check: no object of the sandbox build calls select or poll.
+if [ ! -d "$root/build/guest" ]; then
+	report "net:own" SKIP "no build/guest: run waterbox/build-guest.sh"
+else
+	users="$(find "$root/build/guest" -name '*.a' | sort | while read -r a; do
+		nm -A "$a" 2> /dev/null | grep -E ' U (select|pselect|poll|ppoll|epoll_wait)$' | cut -d: -f2
+	done | sort -u | tr '\n' ' ')"
+	if [ -z "$users" ]; then
+		report "net:own" PASS "no object of the sandbox build waits on the host's network (select, poll)"
+	else
+		report "net:own" FAIL "these wait on the host's network: $users"
+	fi
+fi
+
 # A game that is a container: one file with no extension, as Xbox Live
 # Arcade games are (issue 250). This repository has no such game, so one is
 # made from the disc image: tests/make-container.py puts the image's own
