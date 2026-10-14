@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """Makes an Xbox Live Arcade style container out of a game disc image.
 
-  make-container.py <disc image .iso> <container to write> [<file in the image>...]
+  make-container.py [--kind <hex>] <disc image .iso> <container to write> [<file in the image>...]
+
+--kind is the content kind the container says it is: 000D0000, an Arcade
+game, unless another is named (00000002 is add-on content, chimera issue
+271).
 
 An Xbox Live Arcade game is one file with no extension: a "LIVE" container
 (the console's STFS format) with the game's program, default.xex, and its
@@ -88,6 +92,10 @@ def level0_table_block(block):
 
 
 def main():
+    kind = 0x000D0000
+    if len(sys.argv) > 2 and sys.argv[1] == "--kind":
+        kind = int(sys.argv[2], 16)
+        del sys.argv[1:3]
     if len(sys.argv) < 3:
         raise SystemExit(__doc__)
     wanted = [n.lower() for n in sys.argv[3:]] or ["default.xex"]
@@ -150,7 +158,7 @@ def main():
     # the first licence: anybody's, with the bit an Arcade game reads as "bought"
     struct.pack_into(">QII", header, 0x22C, 0xFFFFFFFFFFFFFFFF, 1, 0)
     struct.pack_into(">I", header, 0x340, header_size)
-    struct.pack_into(">IIQ", header, 0x344, 0x000D0000, 2, len(area))  # an Arcade title
+    struct.pack_into(">IIQ", header, 0x344, kind, 2, len(area))  # an Arcade title unless --kind
     struct.pack_into(">IIII", header, 0x354, 0, 0, 0, title_id)
     descriptor = bytes([0x24, 0, 0x01])  # read-only format
     descriptor += struct.pack("<H", 1) + (0).to_bytes(3, "little")
@@ -164,7 +172,7 @@ def main():
     with open(sys.argv[2], "wb") as out:
         out.write(header)
         out.write(area)
-    print("%s: %d files, %d blocks, title %08X" % (sys.argv[2], len(files), total, title_id))
+    print("%s: %d files, %d blocks, title %08X, kind %08X" % (sys.argv[2], len(files), total, title_id, kind))
 
 
 if __name__ == "__main__":

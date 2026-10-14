@@ -23,6 +23,8 @@
  *                   new device, as it is after a load
  * --ppm FILE [--ppm-at F]    the picture after frame F (the last one without
  *                   --ppm-at), as a file a person can look at
+ * --content FILE    a package for the Content slot (up to eight)
+ * --savedata FILE   a zip for the Save data slot
  */
 #ifndef CHIMERA_XENIA_GATE_HARNESS_H_
 #define CHIMERA_XENIA_GATE_HARNESS_H_
@@ -66,11 +68,28 @@ struct harness_opts {
 	uint64_t frames, every, save_at, remake_every;
 	int rerecord, log, pads, trace_schedule, pace;
 	long long instruction_ps, yield_ns;
-	const char *renderer, *save_state, *state, *ppm;
+	const char *renderer, *save_state, *state, *ppm, *savedata;
+	const char *content[8];
+	int contents;
 	uint64_t ppm_at;
 	struct harness_event press[HARNESS_MAX_EVENTS], axis[HARNESS_MAX_EVENTS];
 	int presses, axes;
 };
+
+/* The project's slot map for the files given besides the game, each named
+ * by name(path) - the path natively, the mounted name in the sandbox. */
+static void harness_slots(const struct harness_opts *o, const char *(*name)(const char *), char *out, size_t size)
+{
+	size_t n = (size_t)snprintf(out, size, "{\"content\": [");
+	for (int i = 0; i < o->contents && n < size; i++)
+		n += (size_t)snprintf(out + n, size - n, "%s\"%s\"", i ? ", " : "", name(o->content[i]));
+	if (n < size)
+		n += (size_t)snprintf(out + n, size - n, "], \"savedata\": [");
+	if (o->savedata && n < size)
+		n += (size_t)snprintf(out + n, size - n, "\"%s\"", name(o->savedata));
+	if (n < size)
+		snprintf(out + n, size - n, "]}");
+}
 
 /* The options from argv[first...]. 0 with a message when one is not one. */
 static int harness_parse(int argc, char **argv, int first, struct harness_opts *o)
@@ -99,6 +118,11 @@ static int harness_parse(int argc, char **argv, int first, struct harness_opts *
 		else if (!strcmp(a, "--save-state")) o->save_state = v;
 		else if (!strcmp(a, "--state")) o->state = v;
 		else if (!strcmp(a, "--ppm")) o->ppm = v;
+		else if (!strcmp(a, "--savedata")) o->savedata = v;
+		else if (!strcmp(a, "--content")) {
+			if (o->contents == 8) { fprintf(stderr, "--content: eight at most\n"); return 0; }
+			o->content[o->contents++] = v;
+		}
 		else if (!strcmp(a, "--ppm-at")) o->ppm_at = strtoull(v, NULL, 10);
 		else if (!strcmp(a, "--press")) {
 			struct harness_event e = { 0 };

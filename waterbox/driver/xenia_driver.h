@@ -36,6 +36,13 @@ struct Options {
   // the machine's speed is made of, and a machine with others is another.
   int64_t instruction_ps = 0;
   int64_t yield_ns = 0;
+  // Packages put in the console's storage before the game starts, as
+  // Xenia's Install Content puts them (the Content slot): add-on content,
+  // title updates, saved games. Each is a file to open.
+  std::vector<std::string> content;
+  // The console's storage as Emulator > Export Save Data wrote it: a zip of
+  // content/... (the Save data slot), or "".
+  std::string savedata;
 };
 
 // Switch the machine on with a program in it. False with the reason in error.

@@ -89,7 +89,9 @@ int main(int argc, char** argv) {
   }
   char settings[256];
   harness_settings(&o, settings, sizeof settings);
-  if (!write_file("rom.name", program) || !write_file("settings", settings)) {
+  char slots[4096];
+  harness_slots(&o, [](const char* path) { return path; }, slots, sizeof slots);
+  if (!write_file("rom.name", program) || !write_file("settings", settings) || !write_file("slots", slots)) {
     std::fprintf(stderr, "run-frames: cannot write into %s\n", argv[2]);
     return 2;
   }

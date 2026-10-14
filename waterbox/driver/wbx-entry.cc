@@ -102,6 +102,35 @@ std::string slot_first(const std::string& slots, const char* id) {
   return out;
 }
 
+// Every name in a slot of the project's slot map, in order.
+std::vector<std::string> slot_all(const std::string& slots, const char* id) {
+  std::vector<std::string> out;
+  const std::string k = std::string("\"") + id + "\"";
+  const auto at = slots.find(k);
+  if (at == std::string::npos) {
+    return out;
+  }
+  size_t i = slots.find('[', at + k.size());
+  const size_t close = i == std::string::npos ? i : slots.find(']', i);
+  while (i != std::string::npos && i < close) {
+    i = slots.find('"', i + 1);
+    if (i == std::string::npos || i > close) {
+      break;
+    }
+    std::string name;
+    size_t j = i + 1;
+    for (; j < slots.size() && slots[j] != '"'; j++) {
+      if (slots[j] == '\\' && j + 1 < slots.size()) {
+        j++;
+      }
+      name += slots[j];
+    }
+    out.push_back(name);
+    i = j;
+  }
+  return out;
+}
+
 // A mounted file's name as it opens: a project mounts a slot's file under
 // the name the map gives, a file opened on its own sits at "/<name>" too.
 std::string mounted(const std::string& name) {
@@ -218,6 +247,10 @@ CORE_EXPORT int Init(void) {
     return 0;
   }
   options.arcade_bought = arcade != "trial";
+  for (const std::string& package : slot_all(slots, "content")) {
+    options.content.push_back(mounted(package));
+  }
+  options.savedata = mounted(slot_first(slots, "savedata"));
   if (options.renderer == "vulkan" && !g_bridge) {
     g_error = "the Vulkan renderer needs a device, and none was handed over. Either this machine has no Vulkan, or "
               "this Chimera is older than this core: its Vulkan bridge has fewer commands than the core was built "

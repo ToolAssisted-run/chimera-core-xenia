@@ -8,6 +8,7 @@
 // Vanik and the Xenia authors), with the host's pad taken out of it.
 #include "xenia_driver.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdio>
 #include <cstring>
@@ -17,6 +18,7 @@
 
 #include "machine_settings.h"
 #include "memfs.h"
+#include "third_party/zlib-ng/zlib-ng.h"
 
 #ifdef CHIMERA_GUEST
 #include "vk-bridge.h"
@@ -38,6 +40,8 @@
 #include "xenia/hid/input_driver.h"
 #include "xenia/hid/input_system.h"
 #include "xenia/kernel/kernel_state.h"
+#include "xenia/kernel/xam/content_manager.h"
+#include "xenia/kernel/xam/xam_content_device.h"
 #include "xenia/kernel/xam/profile_manager.h"
 #include "xenia/kernel/xam/xam_state.h"
 #include "xenia/memory.h"
@@ -70,6 +74,9 @@ constexpr size_t AUDIO_CAP_PAIRS = 48000;
 
 struct Machine {
   std::unique_ptr<xe::Emulator> emulator;
+  // the files the project's read-only packages became in the storage, and
+  // their headers: the project's, not save data, and never exported
+  std::vector<std::string> brought;
   Pad pads[PORTS];
   bool input_read = false;
   uint64_t frames = 0;
@@ -535,11 +542,220 @@ bool is_container(const std::string& program) {
 }
 }  // namespace
 
+namespace {
+std::string base_name(const std::string& path) {
+  const size_t slash = path.find_last_of('/');
+  return slash == std::string::npos ? path : path.substr(slash + 1);
+}
+
+// Whether the console now lists the package where a game asks for it: the
+// same listing XamContentCreateEnumerator makes, for the package's title and
+// kind, on the hard drive, for its owner (a saved game is the signed-in
+// player's, other content everybody's).
+bool listed(Machine& m, uint64_t xuid, uint32_t title, const xe::Emulator::ContentInstallEntry& entry,
+            const std::string& name, std::string& error) {
+  if (entry.content_type_ == xe::XContentType::kSavedGame) {
+    if (const auto profile = m.emulator->kernel_state()->xam_state()->profile_manager()->GetProfile(uint8_t(0))) {
+      xuid = profile->xuid();
+    }
+  }
+  const auto found = m.emulator->kernel_state()->content_manager()->ListContent(
+      static_cast<uint32_t>(xe::kernel::xam::DummyDeviceId::HDD), xuid, title, entry.content_type_,
+      static_cast<xe::kernel::xam::XContentFlag>(0));
+  for (const auto& data : found) {
+    if (data.file_name() == entry.filename_.string()) {
+      XELOGI("chimera: {} is in the console's storage: title {:08X}, kind {:08X}", name, title,
+             static_cast<uint32_t>(entry.content_type_));
+      return true;
+    }
+  }
+  char what[64];
+  std::snprintf(what, sizeof what, "title %08X, kind %08X", title, static_cast<uint32_t>(entry.content_type_));
+  error = name + " was put in the console's storage, but the console does not list it there (" + what + ")";
+  return false;
+}
+
+// One package of the Content slot into the console's storage, where Xenia's
+// Install Content puts it (chimera issue 271): under content/<profile or
+// 0>/<title>/<kind>/, with its header beside. A package the console treats
+// as read-only - add-on content, a title update - is kept as the one file it
+// is, and here that file is the project's own, served in place: nothing is
+// copied, and a savestate does not carry it. One a player can write (a saved
+// game) is unpacked into the storage, as Xenia does, and is then the
+// machine's to change.
+bool install_package(Machine& m, const std::string& host, std::string& error) {
+  const std::string name = base_name(host);
+  xe::Emulator::ContentInstallEntry entry{std::filesystem::path(host)};
+  if (XFAILED(m.emulator->ProcessContentPackageHeader(host, entry))) {
+    error = name + " is not an Xbox 360 package (" + entry.installation_error_message_ +
+            "): the Content slot takes add-on content, title updates and saved games, each one file as the console keeps it";
+    return false;
+  }
+  const auto type = entry.content_type_;
+  if (type != xe::XContentType::kMarketplaceContent && type != xe::XContentType::kInstaller &&
+      type != xe::XContentType::kSavedGame) {
+    char kind[16];
+    std::snprintf(kind, sizeof kind, "%08X", static_cast<uint32_t>(type));
+    error = name + " is a package of kind " + kind +
+            ", which the Content slot does not take: it takes add-on content (00000002), title updates (000B0000) "
+            "and saved games (00000001). A game itself goes in the Game slot";
+    return false;
+  }
+  auto* contents = m.emulator->kernel_state()->content_manager();
+  auto package = contents->OpenPackage(host);
+  if (!package || !package->GetContainerHeader()) {
+    error = name + " could not be opened as a package";
+    return false;
+  }
+  if (package->GetContainerMetadata()->volume_type.get() != xe::kernel::xam::XContentVolumeType::kStfs) {
+    error = name + " is a package of the kind that is a file beside a folder of data (SVOD), which is not supported";
+    return false;
+  }
+  const uint64_t owner = package->GetContainerMetadata()->profile_id;
+  const uint32_t title = package->GetContainerMetadata()->execution_info.title_id;
+  const std::string folder = entry.data_installation_path_.string();
+  const std::string file = (entry.data_installation_path_ / entry.filename_).string();
+  if (!chimera::memfs::mkdirs(folder) ||
+      !chimera::memfs::mkdirs(entry.header_installation_path_.parent_path().string()) ||
+      XFAILED(xe::kernel::xam::ContentManager::ExtractContentHeader(entry.header_installation_path_,
+                                                                    *package->GetContainerHeader()))) {
+    error = name + " could not be put in the console's storage";
+    return false;
+  }
+  if (package->IsReadOnly()) {
+    if (!chimera::memfs::graft(file, host)) {
+      error = name + " could not be put in the console's storage";
+      return false;
+    }
+    m.brought.push_back(file);
+    m.brought.push_back(entry.header_installation_path_.string());
+    return listed(m, owner, title, entry, name, error);
+  }
+  package.reset();
+  auto* mounted = contents->OpenAndMountPackage(host, "");
+  uint64_t progress = 0;
+  const xe::X_STATUS status =
+      mounted ? contents->InstallContentPackage(mounted, file, entry.header_installation_path_, progress) : X_STATUS_UNSUCCESSFUL;
+  if (mounted) {
+    contents->CloseContentByDeviceName(mounted->GetDevicePath());
+  }
+  if (XFAILED(status)) {
+    error = name + " could not be unpacked into the console's storage";
+    return false;
+  }
+  return listed(m, owner, title, entry, name, error);
+}
+
+// The Save data slot: a zip as Emulator > Export Save Data wrote it, every
+// entry content/..., written back into the console's storage before the game
+// starts. Stored and deflated entries, as zip tools write them.
+uint32_t le32(const uint8_t* p) { return p[0] | p[1] << 8 | p[2] << 16 | uint32_t(p[3]) << 24; }
+uint16_t le16(const uint8_t* p) { return static_cast<uint16_t>(p[0] | p[1] << 8); }
+
+bool load_savedata(const std::string& host, std::string& error) {
+  const std::string name = base_name(host);
+  std::vector<uint8_t> zip;
+  if (FILE* f = std::fopen(host.c_str(), "rb")) {
+    uint8_t buf[65536];
+    size_t n;
+    while ((n = std::fread(buf, 1, sizeof buf, f)) > 0) {
+      zip.insert(zip.end(), buf, buf + n);
+    }
+    std::fclose(f);
+  }
+  // the end of the central directory: the last 22 bytes and a comment
+  size_t end = std::string::npos;
+  for (size_t i = zip.size() >= 22 ? zip.size() - 22 : 0; zip.size() >= 22; i--) {
+    if (le32(&zip[i]) == 0x06054b50u) {
+      end = i;
+      break;
+    }
+    if (i == 0 || zip.size() - i > 22 + 65535) {
+      break;
+    }
+  }
+  if (end == std::string::npos) {
+    error = name + " is not a zip: the Save data slot takes the zip Emulator > Export Save Data writes";
+    return false;
+  }
+  const uint16_t count = le16(&zip[end + 10]);
+  size_t at = le32(&zip[end + 16]);
+  for (uint16_t k = 0; k < count; k++) {
+    if (at + 46 > zip.size() || le32(&zip[at]) != 0x02014b50u) {
+      error = name + " is a damaged zip";
+      return false;
+    }
+    const uint16_t method = le16(&zip[at + 10]);
+    const uint32_t packed = le32(&zip[at + 20]), size = le32(&zip[at + 24]);
+    const uint16_t name_length = le16(&zip[at + 28]), extra = le16(&zip[at + 30]), comment = le16(&zip[at + 32]);
+    const uint32_t local = le32(&zip[at + 42]);
+    const std::string entry(reinterpret_cast<const char*>(&zip[at + 46]), name_length);
+    at += 46 + name_length + extra + comment;
+    if (!entry.empty() && entry.back() == '/') {
+      continue;
+    }
+    if (entry.rfind("content/", 0) != 0 || entry.find("..") != std::string::npos) {
+      error = name + " holds " + entry +
+              ", which is not the console's storage: the zip Emulator > Export Save Data writes has every entry under content/";
+      return false;
+    }
+    if (local + 30 > zip.size() || le32(&zip[local]) != 0x04034b50u) {
+      error = name + " is a damaged zip";
+      return false;
+    }
+    const size_t data = local + 30 + le16(&zip[local + 26]) + le16(&zip[local + 28]);
+    if (data + packed > zip.size()) {
+      error = name + " is a damaged zip";
+      return false;
+    }
+    std::vector<uint8_t> bytes(size);
+    if (method == 0 && packed == size) {
+      std::memcpy(bytes.data(), &zip[data], size);
+    } else if (method == 8) {
+      zng_stream z{};
+      if (zng_inflateInit2(&z, -15) != Z_OK) {
+        error = name + ": " + entry + " could not be unpacked";
+        return false;
+      }
+      z.next_in = &zip[data];
+      z.avail_in = packed;
+      z.next_out = bytes.data();
+      z.avail_out = size;
+      const int r = zng_inflate(&z, Z_FINISH);
+      zng_inflateEnd(&z);
+      if (r != Z_STREAM_END || z.total_out != size) {
+        error = name + ": " + entry + " could not be unpacked";
+        return false;
+      }
+    } else {
+      error = name + ": " + entry + " is packed in a way this core does not read (stored and deflated are read)";
+      return false;
+    }
+    const std::string path = std::string(chimera::memfs::ROOT) + "/" + entry;
+    if (!chimera::memfs::mkdirs(path.substr(0, path.rfind('/'))) || !chimera::memfs::put(path, std::move(bytes))) {
+      error = name + ": " + entry + " could not be written into the console's storage";
+      return false;
+    }
+  }
+  return true;
+}
+}  // namespace
+
 bool boot(const std::string& program, const Options& options, std::string& error) {
   if (!switch_on(options, error)) {
     return false;
   }
   Machine& m = *g_machine;
+  // What the project brings besides the game, before the game starts: the
+  // saved storage first, then the packages on top of it.
+  if (!options.savedata.empty() && !load_savedata(options.savedata, error)) {
+    return false;
+  }
+  for (const std::string& package : options.content) {
+    if (!install_package(m, package, error)) {
+      return false;
+    }
+  }
   // The first licence bit is what an Arcade game reads as "bought". A disc
   // game that asks is answered with none, as before there was this setting.
   cvars::license_mask = is_container(program) && options.arcade_bought ? 1 : 0;
@@ -735,6 +951,10 @@ size_t savedata_snapshot() {
   g_saved.clear();
   const std::string content = std::string(chimera::memfs::ROOT) + "/content";
   for (const std::string& relative : chimera::memfs::list(content)) {
+    const std::string path = content + "/" + relative;
+    if (g_machine && std::find(g_machine->brought.begin(), g_machine->brought.end(), path) != g_machine->brought.end()) {
+      continue;
+    }
     SavedFile file;
     file.name = "content/" + relative;
     if (chimera::memfs::get(content + "/" + relative, file.data)) {

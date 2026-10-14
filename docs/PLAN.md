@@ -1415,3 +1415,34 @@ three views for memory aligned to 8 and 64 KiB, in a range and anywhere; it
 failed at 0xE0000000 before. Ultimate Marvel vs. Capcom 3 now runs 1,200
 frames in the sandbox with picture and sound; nothing past its opening was
 played.
+
+## Content and save data in a project (2026-10-14, chimera #271)
+
+A project now has two more slots. **Content** takes packages - add-on
+content (00000002), title updates (000B0000) and saved games (00000001) -
+and puts each where standalone Xenia's Install Content puts it, under
+`content/<owner>/<title>/<kind>/`, with its header beside it, before the
+game starts. A package the console treats as read-only (add-on content, a
+title update) is used as the one file it is, and here that file is the
+project's own, served by the machine's file system without a copy: it costs
+no memory and no space in a savestate, and it is not exported as save data.
+A package a player writes (a saved game) is unpacked into the storage, as
+Xenia does, and is the machine's from then on. After putting a package in,
+the core asks the console to list that title's content of that kind - the
+listing a game's enumeration makes - and refuses the project if the package
+is not in it. Other kinds, and packages of the kind that is a file beside a
+folder (SVOD), are refused by name.
+
+**Save data** takes the zip Emulator > Export Save Data writes (every entry
+under `content/`); it is written back into the storage before the packages.
+Stored and deflated entries are read, with the zlib Xenia already has.
+
+Tests: `content:install` makes add-on content from the disc
+(`tests/make-container.py --kind 00000002`), has both runners put it in
+(their new `--content`) and finds the console listing it; a package of
+another kind is refused. `frontend:savedata-in` puts a zip in a project and
+finds both its files byte for byte in the next export, the add-on content
+not exported, and a zip holding anything outside `content/` refused. With
+the add-on content the owner gave (Mirror's Edge, "Pure Time Trials"), the
+console lists it under the game's title in both runners. Whether a game then
+offers the content it finds was not played.

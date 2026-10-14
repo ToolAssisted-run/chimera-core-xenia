@@ -9,6 +9,10 @@ chimera-run's command line never goes through - and an Xbox Live Arcade game
 is a file with no extension (chimera issue 250).
 
 usage: make-project.py <package> <out.chimeraProject> <game file> [--set=<setting>=<value> ...]
+                       [--file=<slot>=<path> ...]
+
+A --file is another file of the project, in the slot named (content,
+savedata); chimera-run is then given the folder it is in with --files.
 
 The project has no input: chimera-run records the frames it is asked to run.
 """
@@ -31,7 +35,12 @@ def main():
     package, out, game = sys.argv[1:4]
     cfg = json.loads(zipfile.ZipFile(package).read("waterbox.config"))
     settings = {d["name"]: d["default"] for d in cfg.get("settings", []) if d.get("default") is not None}
+    files = []
     for arg in sys.argv[4:]:
+        if arg.startswith("--file="):
+            slot, path = arg[len("--file="):].split("=", 1)
+            files.append({"name": os.path.basename(path), "sha1": sha1(path), "slot": slot})
+            continue
         name, value = arg[len("--set="):].split("=", 1)
         if name not in settings:
             sys.exit("make-project.py: the package declares no setting %r" % name)
@@ -43,7 +52,7 @@ def main():
         "description": "written by waterbox/tests/make-project.py",
         "core": {"name": cfg["coreName"], "version": cfg["version"], "sha1": sha1(package)},
         "rerecords": 0,
-        "files": [{"name": os.path.basename(game), "sha1": game_sha1, "slot": "game"}],
+        "files": [{"name": os.path.basename(game), "sha1": game_sha1, "slot": "game"}] + files,
         "settings": settings,
         "firmware": [],
         "coreCache": [],

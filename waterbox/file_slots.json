@@ -1,5 +1,5 @@
 {
-  "_comment": "This file lists the kinds of file an Xbox 360 project can hold. Chimera's New Project window is built from it. A project is one game.",
+  "_comment": "This file lists the kinds of file an Xbox 360 project can hold. Chimera's New Project window is built from it. A project is one game, the packages to put in the console's storage before it starts, and optionally the storage as Emulator > Export Save Data wrote it.",
   "slots": [
     {
       "id": "game",
@@ -11,6 +11,26 @@
         ""
       ],
       "help": "The game: a disc image (.iso) of an Xbox 360 game disc, or an Xbox Live Arcade game. An Arcade game is one file with no extension and a long name of letters and digits, as it sits in the console's storage under Content/0000000000000000/<title>/000D0000. Games on Demand (a small file beside a folder of data files) are not supported. The console's own system software is not needed: Xenia stands in for it. Xenia Canary's compatibility list (github.com/xenia-canary/game-compatibility) says which games work."
+    },
+    {
+      "id": "content",
+      "title": "Content",
+      "min": 0,
+      "max": 64,
+      "formats": [
+        ""
+      ],
+      "help": "Packages to put in the console's storage before the game starts, as standalone Xenia's File > Install Content does: add-on content (DLC), title updates and saved games. Each is one file with no extension and a long name of letters and digits, as it sits in the console's storage under Content/<profile>/<title>/<kind>. Add-on content and title updates are used as they are; a saved game is unpacked into the storage and is the machine's from then on. The project and the movie record exactly which files were used, as they do for the game."
+    },
+    {
+      "id": "savedata",
+      "title": "Save data",
+      "min": 0,
+      "max": 1,
+      "formats": [
+        "zip"
+      ],
+      "help": "What the console kept, as Emulator > Export Save Data... wrote it: a .zip whose entries are all under content/ (profiles and saved games). It is put back in the console's storage before the game starts. A saved game as a single package from a console goes in the Content slot instead."
     }
   ]
 }

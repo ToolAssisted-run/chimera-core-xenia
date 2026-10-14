@@ -124,6 +124,13 @@ static void mount_text(const char *name, const char *text)
 	}
 }
 
+/* a path's last part: the name a file is mounted under */
+static const char *base_of(const char *path)
+{
+	const char *slash = strrchr(path, '/');
+	return slash ? slash + 1 : path;
+}
+
 int main(int argc, char **argv)
 {
 	if (argc < 3) {
@@ -187,6 +194,20 @@ int main(int argc, char **argv)
 	harness_settings(&o, settings, sizeof settings);
 	mount_text("rom.name", base);
 	mount_text("settings", settings);
+	/* the files besides the game, each mounted under its own name */
+	for (int i = 0; i <= o.contents; i++) {
+		const char *path = i < o.contents ? o.content[i] : o.savedata;
+		if (!path)
+			continue;
+		wbx_mount_file_path(g_host, base_of(path), path, &r);
+		if (r.error_message[0]) {
+			fprintf(stderr, "run-wbx: %s: %s\n", path, (const char *)r.error_message);
+			return 2;
+		}
+	}
+	char slots[4096];
+	harness_slots(&o, base_of, slots, sizeof slots);
+	mount_text("slots", slots);
 
 	wbx_activate_host(g_host, &r);
 	if (r.error_message[0]) {

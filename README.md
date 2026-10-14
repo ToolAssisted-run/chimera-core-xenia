@@ -35,6 +35,12 @@ own system software is not needed. Xenia Canary's
 [compatibility list](https://github.com/xenia-canary/game-compatibility)
 says which games work in Xenia itself.
 
+Besides the game, a project can hold **Content**: add-on content (DLC),
+title updates and saved games, each one package file as a console keeps it,
+put in the console's storage before the game starts as standalone Xenia's
+Install Content does. And **Save data**: the zip Emulator > Export Save
+Data... writes, put back the same way.
+
 ## Settings
 
 - **Renderer**: `vulkan-hw` draws on the graphics card. `null` draws nothing

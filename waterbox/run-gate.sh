@@ -533,6 +533,81 @@ else
 	fi
 fi
 
+# Packages put in the console's storage before the game starts, as Xenia's
+# Install Content puts them (chimera issue 271): add-on content, title
+# updates, saved games. This repository has no package, so one is made from
+# the disc image: tests/make-container.py --kind 00000002 writes the disc's
+# program into a package that says it is the disc game's add-on content. The
+# core puts it in and then asks the console to list that title's add-on
+# content, as a game does, and says so when it is there; natively and in the
+# sandbox alike. A package of a kind the slot does not take (the Arcade game
+# container made above) is refused by name.
+if [ "$have_native" = 0 ]; then
+	report "content:install" SKIP "$why_native"
+elif [ "$have_sandbox" = 0 ]; then
+	report "content:install" SKIP "$why_sandbox"
+elif [ ! -s "$container" ]; then
+	report "content:install" SKIP "no test container (container:launch did not make one)"
+elif ! python3 "$here/tests/make-container.py" --kind 00000002 "$game" "$work/addon" > "$work/addon.out" 2>&1; then
+	report "content:install" FAIL "the test package could not be made: $(tail -1 "$work/addon.out")"
+else
+	"$run" "$game" "$work/ad-work" --instruction-ps "$cost_fast" --frames 10 --log --content "$work/addon" > "$work/ad-native.out" 2>&1
+	"$wbx/run-wbx" "$wbx/core.wbx" "$game" --instruction-ps "$cost_fast" --frames 10 --log --content "$work/addon" > "$work/ad-sandbox.out" 2>&1
+	"$run" "$game" "$work/aw-work" --instruction-ps "$cost_fast" --frames 10 --content "$container" > "$work/ad-wrong.out" 2>&1
+	aw=$?
+	said="addon is in the console's storage: title $(sed -n 's/.*title \([0-9A-F]*\),.*/\1/p' "$work/addon.out"), kind 00000002"
+	if grep -q "$said" "$work/ad-native.out" && grep -q "$said" "$work/ad-sandbox.out" &&
+		grep -q "^end frame=10 " "$work/ad-native.out" && grep -q "^end frame=10 " "$work/ad-sandbox.out" &&
+		[ "$aw" != 0 ] && grep -q "which the Content slot does not take" "$work/ad-wrong.out"; then
+		report "content:install" PASS "add-on content made from the disc is put in the console's storage and listed where a game asks for it ($said), natively and in the sandbox; a package of another kind is refused"
+	else
+		report "content:install" FAIL "native [$(grep -o 'chimera: .*' "$work/ad-native.out" | tail -1)] sandbox [$(grep -o 'chimera: .*' "$work/ad-sandbox.out" | tail -1)] wrong kind: exit $aw [$(tail -1 "$work/ad-wrong.out")]"
+	fi
+fi
+# And the Save data slot through the frontend's engine: a zip as Emulator >
+# Export Save Data writes it goes back into the storage before the game
+# starts, and the next export has it, byte for byte. A zip holding anything
+# not under content/ is refused by name. The project's add-on content is not
+# save data and is not in the export.
+if [ -z "$chimera_root" ] || [ ! -x "$engine" ] || [ ! -f "$package" ]; then
+	report "frontend:savedata-in" SKIP "set CHIMERA_ROOT to a Chimera checkout with build/meson-linux/chimera-run and the package (waterbox/build-package.sh -r <it>)"
+elif [ ! -s "$work/addon" ]; then
+	report "frontend:savedata-in" SKIP "no test package (content:install did not make one)"
+else
+	mkdir -p "$work/sd-in" "$work/sd-bad"
+	python3 - "$work/sd-in/saved.zip" "$work/sd-bad/saved.zip" <<'SAVEZIP'
+import sys, zipfile
+with zipfile.ZipFile(sys.argv[1], "w", zipfile.ZIP_DEFLATED) as z:
+    z.writestr("content/B13EBABEBABEBABE/45410850/00000001/chimera-test/progress.bin", bytes(range(256)) * 9)
+    z.writestr("content/0000000000000000/45410850/00000001/stored.txt", b"kept as it was\n", compress_type=zipfile.ZIP_STORED)
+with zipfile.ZipFile(sys.argv[2], "w") as z:
+    z.writestr("savedata/elsewhere.bin", b"not the console's storage")
+SAVEZIP
+	cp "$work/addon" "$work/sd-in/addon"
+	python3 "$here/tests/make-project.py" "$package" "$work/sd.chimeraProject" "$game" --set=renderer=null --set=cpu_speed=4000 \
+		--file=savedata="$work/sd-in/saved.zip" --file=content="$work/sd-in/addon" > "$work/sd-make.out" 2>&1
+	env -u DISPLAY "$engine" --project "$work/sd.chimeraProject" "$package" --files "$(dirname "$game")" --files "$work/sd-in" \
+		--frames 30 --record "$work/sd.movie" --export-savedata "$work/sd-out" > "$work/sd.out" 2>&1
+	sd=$?
+	python3 "$here/tests/make-project.py" "$package" "$work/sd-bad.chimeraProject" "$game" --set=renderer=null --set=cpu_speed=4000 \
+		--file=savedata="$work/sd-bad/saved.zip" > "$work/sd-bad-make.out" 2>&1
+	env -u DISPLAY "$engine" --project "$work/sd-bad.chimeraProject" "$package" --files "$(dirname "$game")" --files "$work/sd-bad" \
+		--frames 5 --record "$work/sd-bad.movie" > "$work/sd-bad.out" 2>&1
+	bad=$?
+	back="$(python3 - "$work/sd-in/saved.zip" "$work/sd-out" <<'SAVECMP'
+import os, sys, zipfile
+z = zipfile.ZipFile(sys.argv[1])
+print(sum(1 for n in z.namelist() if open(os.path.join(sys.argv[2], n), "rb").read() == z.read(n)) if all(os.path.exists(os.path.join(sys.argv[2], n)) for n in z.namelist()) else 0)
+SAVECMP
+)"
+	if [ "$sd" = 0 ] && [ "$back" = 2 ] && ! find "$work/sd-out" -name addon -o -name addon.header | grep -q . &&
+		[ "$bad" != 0 ] && grep -q "which is not the console's storage" "$work/sd-bad.out"; then
+		report "frontend:savedata-in" PASS "a save data zip in the project is back in the next export, both files byte for byte (one deflated, one stored); the project's add-on content is not exported; a zip with anything else is refused"
+	else
+		report "frontend:savedata-in" FAIL "exit $sd, $back of 2 files back; a wrong zip: exit $bad [$(tail -1 "$work/sd-bad.out")]; $(tail -1 "$work/sd.out")"
+	fi
+fi
+
 # A game that draws its picture at 1920x1080. The console tells every game
 # the television is 1280x720, and most draw at that size, but some draw at
 # 1920x1080 and let the console scale the picture down. The package declared
