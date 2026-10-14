@@ -14,8 +14,9 @@ savestates. Nothing else has been tested.
 - The picture is drawn by Xenia's Vulkan renderer on your graphics card,
   through Chimera's Vulkan bridge. It needs a Chimera build that has the
   bridge and a card with a Vulkan driver.
-- It is slow. With the default CPU Speed setting a game runs at roughly a
-  third to a half of real time on a fast computer.
+- It is slow. With the default CPU Speed setting a game that keeps the
+  processor busy runs at roughly a quarter of real time on a fast computer
+  (CPU Speed 500 is about four times faster, for games that load at it).
 - What a game saves can be exported from Chimera, but a save cannot be put
   in before the game starts yet.
 - The host processor must have AVX2 and FMA.
@@ -40,12 +41,10 @@ says which games work in Xenia itself.
   and needs no card; the game runs exactly the same, with a black picture.
 - **Controllers**: how many of the four controllers are plugged in.
 - **CPU Speed**: how many million instructions the console's processor runs
-  in a second. 2000 is the closest to a real console. 500 is the default
-  because it runs faster on your computer, which matters when making a TAS.
-  Some games never finish loading at the lower speeds (Prince of Persia
-  Classic needs 2000): if a game stays on a loading screen, make a new
-  project with a higher one. A movie made at one speed does not play back
-  at another.
+  in a second. 2000, the default, is the closest to a real console; some
+  games never finish loading below it (Prince of Persia Classic). 500 and
+  1000 run faster on your computer, for a game that loads at them. A movie
+  made at one speed does not play back at another.
 - **Arcade Games**: for Xbox Live Arcade games only. `full` tells the game
   it was bought; `trial` makes it its free trial version. A disc game is
   not affected.

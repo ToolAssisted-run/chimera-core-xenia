@@ -309,10 +309,11 @@ else
 	fi
 fi
 
-# The default CPU Speed is 500 million instructions a second: a run that
-# names no speed is the run at 2000 ps an instruction, and is not the run at
-# 250. (The runner's own default; the package's default is checked by the
-# contract tests against waterbox.config.)
+# The RUNNER's own default speed is 500 million instructions a second: a run
+# that names no speed is the run at 2000 ps an instruction, and is not the run
+# at 250. The PACKAGE's default is another thing - 2000 million since
+# 2026-10-14 (chimera issue 266), what a new project gets - and is checked by
+# the contract tests against waterbox.config.
 if [ "$have_native" = 0 ]; then
 	report "speed:default" SKIP "$why_native"
 else

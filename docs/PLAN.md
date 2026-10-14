@@ -1375,3 +1375,12 @@ threads on different hardware threads run at the same moment would give the
 loading thread its whole turn; it would also make every game that spins
 cost the host more. That is a change to what the machine is, not made here.
 
+**The default changed (user-decided, 2026-10-14).** CPU Speed now defaults to
+2000, the closest to a real console, so a game like this one loads in a new
+project without anybody having to know to raise it. The cost is host speed
+for games that keep the processor busy between frames: about a quarter of
+real time instead of near full. 500 and 1000 stay as choices. A project made
+before keeps the speed it was made with (a project carries every setting),
+so its movies are unchanged. The runners' own default, when no speed is
+named, stays 500 (`speed:default`).
+
