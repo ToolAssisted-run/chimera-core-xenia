@@ -1386,3 +1386,14 @@ before keeps the speed it was made with (a project carries every setting),
 so its movies are unchanged. The runners' own default, when no speed is
 named, stays 500 (`speed:default`).
 
+
+## A game that waits on the network (2026-10-14, chimera #269)
+
+Dead Rising 2: Case Zero makes a socket, which the sandbox refuses, and then
+waits for sockets to be ready with select. Xenia handed that wait to the
+computer's own select, which the sandbox does not provide, and the machine
+stopped at frame 129. With no network no socket is ever ready, so the wait
+is now a sleep for its timeout on the machine's clock, and with no timeout
+it never ends (patch 0003, NetDll_select). The test `net:own` checks that no
+part of the sandbox build calls the computer's select or poll. The game now
+runs past its logos; the rest of it has not been played.
