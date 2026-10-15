@@ -27,6 +27,8 @@
  * --insert-disc F:N after frame F, put disc N in as the game would ask
  * --content FILE    a package for the Content slot (up to eight)
  * --savedata FILE   a zip for the Save data slot
+ * --set NAME=VALUE  a project setting, such as one of Xenia's own
+ *                   (scribble_heap=true); up to eight
  */
 #ifndef CHIMERA_XENIA_GATE_HARNESS_H_
 #define CHIMERA_XENIA_GATE_HARNESS_H_
@@ -81,6 +83,9 @@ struct harness_opts {
 	uint64_t ppm_at;
 	struct harness_event press[HARNESS_MAX_EVENTS], axis[HARNESS_MAX_EVENTS];
 	int presses, axes;
+	/* project settings given with --set name=value, as written there */
+	const char *set[8];
+	int sets;
 };
 
 /* The project's slot map for the files given besides the game, each named
@@ -148,6 +153,13 @@ static int harness_parse(int argc, char **argv, int first, struct harness_opts *
 			o->content[o->contents++] = v;
 		}
 		else if (!strcmp(a, "--ppm-at")) o->ppm_at = strtoull(v, NULL, 10);
+		else if (!strcmp(a, "--set")) {
+			if (o->sets == 8 || !strchr(v, '=') || strchr(v, '"')) {
+				fprintf(stderr, "--set wants <setting>=<value> (eight at most, no quotes), not %s\n", v);
+				return 0;
+			}
+			o->set[o->sets++] = v;
+		}
 		else if (!strcmp(a, "--press")) {
 			struct harness_event e = { 0 };
 			if (o->presses == HARNESS_MAX_EVENTS ||
@@ -179,9 +191,17 @@ static int harness_parse(int argc, char **argv, int first, struct harness_opts *
 /* The settings a runner hands the core, as the frontend would. */
 static void harness_settings(const struct harness_opts *o, char *out, size_t size)
 {
-	snprintf(out, size, "{\"renderer\":\"%s\",\"pads\":\"%d\",\"log\":\"%d\",\"trace_schedule\":\"%d\","
-	         "\"instruction_ps\":\"%lld\",\"yield_ns\":\"%lld\"}",
+	size_t n = (size_t)snprintf(out, size, "{\"renderer\":\"%s\",\"pads\":\"%d\",\"log\":\"%d\",\"trace_schedule\":\"%d\","
+	         "\"instruction_ps\":\"%lld\",\"yield_ns\":\"%lld\"",
 	         o->renderer, o->pads, o->log, o->trace_schedule, o->instruction_ps, o->yield_ns);
+	/* each --set name=value as "name":"value", which is how the core reads
+	 * a project's setting of any kind */
+	for (int i = 0; i < o->sets && n < size; i++) {
+		const char *eq = strchr(o->set[i], '=');
+		n += (size_t)snprintf(out + n, size - n, ",\"%.*s\":\"%s\"", (int)(eq - o->set[i]), o->set[i], eq + 1);
+	}
+	if (n < size)
+		snprintf(out + n, size - n, "}");
 }
 
 static uint64_t harness_hash(uint64_t h, const void *data, size_t bytes)

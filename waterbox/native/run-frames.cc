@@ -88,7 +88,7 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "run-frames: %s must be a directory that can be made and is not there yet\n", argv[2]);
     return 2;
   }
-  char settings[256];
+  char settings[1024];
   harness_settings(&o, settings, sizeof settings);
   char slots[4096];
   o.game = program;

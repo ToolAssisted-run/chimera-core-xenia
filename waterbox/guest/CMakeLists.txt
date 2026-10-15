@@ -25,6 +25,8 @@ add_library(xenia-guest-core STATIC
   ${CMAKE_CURRENT_SOURCE_DIR}/../driver/xenia_driver.cc
   ${CMAKE_CURRENT_SOURCE_DIR}/../driver/wbx-entry.cc
   ${CMAKE_CURRENT_SOURCE_DIR}/../driver/memfs.cc
+  ${CMAKE_CURRENT_SOURCE_DIR}/../driver/suggest.cc
+  ${CMAKE_CURRENT_SOURCE_DIR}/../driver/title_id.cc
   ${CMAKE_CURRENT_SOURCE_DIR}/guest-libc.cc
 )
 target_compile_definitions(xenia-guest-core PRIVATE XBYAK_NO_OP_NAMES XBYAK_ENABLE_OMITTED_OPERAND CHIMERA_MEMFS=1)

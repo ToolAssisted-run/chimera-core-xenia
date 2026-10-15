@@ -26,6 +26,8 @@ if(CHIMERA_VSCHED)
     ${CMAKE_CURRENT_SOURCE_DIR}/../driver/xenia_driver.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/../driver/wbx-entry.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/../driver/memfs.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/../driver/suggest.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/../driver/title_id.cc
   )
   target_compile_definitions(run-frames PRIVATE XBYAK_NO_OP_NAMES XBYAK_ENABLE_OMITTED_OPERAND)
   target_link_libraries(run-frames PRIVATE

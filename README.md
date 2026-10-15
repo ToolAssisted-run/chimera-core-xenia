@@ -57,6 +57,13 @@ Data... writes, put back the same way.
 - **Arcade Games**: for Xbox Live Arcade games only. `full` tells the game
   it was bought; `trial` makes it its free trial version. A disc game is
   not affected.
+- **Xenia's own settings**: eighteen of Xenia Canary's settings that some
+  games need, such as Clear Memory Page State, Audio Decoder and Game
+  Command Line. When a project is made, the New Project window fills them
+  in from [Xenia Manager's optimized settings](https://github.com/xenia-manager/optimized-settings)
+  (a port of [A1eNaz's wiki](https://github.com/A1eNaz/Xenia-Game-Settings/wiki))
+  if the game is in that list, and says what it set and why. Each can still
+  be changed.
 
 ## Building and testing
 

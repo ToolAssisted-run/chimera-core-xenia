@@ -1,0 +1,19 @@
+Per-game settings: Xenia Manager's optimized settings
+
+The settings this core suggests for a game when a project is made come from
+Xenia Manager's list of optimized settings:
+
+  https://github.com/xenia-manager/optimized-settings
+
+which is a port of A1eNaz's wiki of optimized settings:
+
+  https://github.com/A1eNaz/Xenia-Game-Settings/wiki
+
+Thanks to the people who wrote and tested them.
+
+The list states no licence. It is carried here with this credit and these
+links, by the decision of Chimera's owner (2026-10-15). The commit of the
+list that was used is named at the top of driver/optimized_settings.inc,
+which waterbox/import-optimized-settings.py makes from it. What each value
+means here, and which values this core does not use, is in that file's
+notes, which the New Project window shows.

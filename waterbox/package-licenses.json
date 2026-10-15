@@ -183,6 +183,14 @@
    "name": "SHA-256 (Stephan Brumme)",
    "license": "Zlib, as its source says",
    "file": "extern/xenia/third_party/crypto/sha256.cpp"
+  },
+  {
+   "name": "Xenia Manager's optimized settings (per-game data)",
+   "license": "none stated; carried with credit and links (owner's decision, 2026-10-15)",
+   "url": "https://github.com/xenia-manager/optimized-settings",
+   "commit": "{selfCommit}",
+   "file": "waterbox/OPTIMIZED-SETTINGS-NOTICE.txt",
+   "sourceUrl": "https://github.com/ToolAssisted-run/chimera-core-xenia/blob/{commit}/waterbox/driver/optimized_settings.inc"
   }
  ]
 }

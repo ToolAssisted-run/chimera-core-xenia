@@ -47,9 +47,12 @@
 #include "xenia/memory.h"
 #include "xenia/ui/presenter.h"
 #include "xenia/ui/virtual_key.h"
+#include "xenia/vfs/devices/host_path_device.h"
 
 DECLARE_path(log_file);
 DECLARE_bool(log_to_stdout);
+// Upstream defines it in its desktop app, which this core does not build.
+DEFINE_bool(mount_scratch, false, "Enable scratch mount", "Storage");
 
 namespace chimera_xenia {
 namespace {
@@ -433,6 +436,33 @@ class SoundSystem final : public xe::apu::AudioSystem {
 
 int16_t clamp16(int32_t v) { return static_cast<int16_t>(v > 32767 ? 32767 : v < -32768 ? -32768 : v); }
 
+// One of Xenia's settings by its name, from its value as Xenia's
+// configuration file writes it - the way Xenia itself reads a game's own
+// configuration file. False with the reason for a name Xenia does not have or
+// a value of the wrong kind.
+bool apply_xenia_setting(const std::string& name, const std::string& value, std::string& error) {
+  const auto found = cvar::ConfigVars ? cvar::ConfigVars->find(name) : std::map<std::string, cvar::IConfigVar*>::iterator();
+  if (!cvar::ConfigVars || found == cvar::ConfigVars->end()) {
+    error = "Xenia has no setting called " + name;
+    return false;
+  }
+  toml::table line;
+  try {
+    line = toml::parse(name + " = " + value);
+  } catch (const toml::parse_error&) {
+    error = "the value of Xenia's setting " + name + " cannot be read: " + value;
+    return false;
+  }
+  // a value of the wrong kind is passed over, and only noted in a list
+  const size_t mismatches = cvar::config_type_mismatch_warnings ? cvar::config_type_mismatch_warnings->size() : 0;
+  found->second->LoadConfigValue(line.get(name));
+  if (cvar::config_type_mismatch_warnings && cvar::config_type_mismatch_warnings->size() != mismatches) {
+    error = "Xenia's setting " + name + " does not take " + value;
+    return false;
+  }
+  return true;
+}
+
 }  // namespace
 
 namespace {
@@ -466,6 +496,13 @@ bool switch_on(const Options& options, std::string& error) {
   // here so that a change of default upstream cannot change the machine.
   xe::gpu::SetZPDMode("fake");
   xe::gpu::SetReadbackResolveMode("none");
+  // Then the project's own choices of Xenia's settings, each read as its
+  // line in Xenia's configuration file would be (chimera#289).
+  for (const auto& [name, value] : options.xenia_settings) {
+    if (!apply_xenia_setting(name, value, error)) {
+      return false;
+    }
+  }
   xe::chimera::g_trace_schedule = options.trace_schedule;
   xe::chimera::SetCosts(options.instruction_ps, options.yield_ns);
   xe::InitializeLogging("chimera");
@@ -510,6 +547,20 @@ bool switch_on(const Options& options, std::string& error) {
     std::snprintf(text, sizeof(text), "the emulator did not set up (%08X)", status);
     error = text;
     return false;
+  }
+  // The console's scratch partition, for a game that keeps something there
+  // (an instant replay, a first load): upstream's desktop app mounts it when
+  // told to, and this core does not use that app, so it is here, in the
+  // machine's own filesystem (mount_scratch, chimera#289).
+  if (cvars::mount_scratch) {
+    const std::filesystem::path scratch = work / "storage" / "scratch";
+    chimera::memfs::mkdirs(scratch.string());
+    auto device = std::make_unique<xe::vfs::HostPathDevice>("\\SCRATCH", scratch, false);
+    if (!device->Initialize() || !m.emulator->file_system()->RegisterDevice(std::move(device))) {
+      error = "the console's scratch partition could not be mounted";
+      return false;
+    }
+    m.emulator->file_system()->RegisterSymbolicLink("scratch:", "\\SCRATCH");
   }
   // One profile, always the same one, always signed in on the first pad: a
   // game that will not save - or will not start - without somebody signed in

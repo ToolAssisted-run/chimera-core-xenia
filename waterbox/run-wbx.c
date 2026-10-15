@@ -190,7 +190,7 @@ int main(int argc, char **argv)
 		fprintf(stderr, "run-wbx: %s: %s\n", argv[2], (const char *)r.error_message);
 		return 2;
 	}
-	char settings[256];
+	char settings[1024];
 	harness_settings(&o, settings, sizeof settings);
 	mount_text("rom.name", base);
 	mount_text("settings", settings);

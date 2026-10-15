@@ -533,6 +533,67 @@ else
 	fi
 fi
 
+# Per-game settings (chimera issue 289). Before a project exists, the New
+# Project window asks the core what it suggests for the game (chimera-run
+# --suggest calls the same export): the game is found by its title id, read
+# from the disc's default.xex or from a container's header, in Xenia
+# Manager's list of optimized settings, which the core carries. Mirror's
+# Edge (45410850) is in the list. The container made above holds the same
+# program, so it must be found as the same game.
+if [ -z "$chimera_root" ] || [ ! -x "$engine" ] || [ ! -f "$package" ]; then
+	report "frontend:suggest" SKIP "set CHIMERA_ROOT to a Chimera checkout with build/meson-linux/chimera-run and the package (waterbox/build-package.sh -r <it>)"
+elif [ ! -f "$game" ]; then
+	report "frontend:suggest" SKIP "$why_native"
+else
+	env -u DISPLAY "$engine" "$package" "$game" --suggest > "$work/sg-disc.out" 2>&1
+	sgd=$?
+	sgc=1
+	[ -s "$container" ] && { env -u DISPLAY "$engine" "$package" "$container" --suggest > "$work/sg-cont.out" 2>&1; sgc=$?; }
+	if [ "$sgd" = 0 ] && grep -q '"title_id":"45410850"' "$work/sg-disc.out" && grep -q "optimized settings for Mirror's Edge" "$work/sg-disc.out" &&
+		[ "$sgc" = 0 ] && grep -q '"title_id":"45410850"' "$work/sg-cont.out"; then
+		report "frontend:suggest" PASS "the disc and the container made from it are both found as 45410850 in the list: $(sed -n 's/.*"note":"\([^"]*\)".*/\1/p' "$work/sg-disc.out" | cut -c1-100)..."
+	else
+		report "frontend:suggest" FAIL "disc: exit $sgd [$(tail -1 "$work/sg-disc.out")]; container: exit $sgc [$(tail -1 "$work/sg-cont.out" 2> /dev/null)]"
+	fi
+fi
+# And a setting of Xenia's that a project sets reaches Xenia. Fill New Memory
+# (scribble_heap) fills what the program is given before it runs, so the
+# console's memory differs from the first frames: in the sandbox, a run with
+# it ends with another digest of the memory than a run without, which the
+# runs above showed is the same every time. Through the frontend's engine, a
+# value of the wrong kind is refused with the setting's name, and the
+# scratch partition, which this core mounts itself, does not stop the run.
+if [ "$have_sandbox" = 0 ] || [ ! -s "$container" ]; then
+	report "xenia-settings" SKIP "${why_sandbox} (or no test container)"
+else
+	"$wbx/run-wbx" "$wbx/core.wbx" "$container" --instruction-ps "$cost_fast" --frames 30 > "$work/xs-a.out" 2> "$work/xs-a.err"
+	"$wbx/run-wbx" "$wbx/core.wbx" "$container" --instruction-ps "$cost_fast" --frames 30 --set scribble_heap=true --set scribble_heap_value=90 > "$work/xs-f.out" 2> "$work/xs-f.err"
+	ram_a="$(sed -n 's/^end .*ramHash=\([0-9a-f]*\) .*/\1/p' "$work/xs-a.out")"
+	ram_f="$(sed -n 's/^end .*ramHash=\([0-9a-f]*\) .*/\1/p' "$work/xs-f.out")"
+	if [ -n "$ram_a" ] && [ -n "$ram_f" ] && [ "$ram_a" != "$ram_f" ]; then
+		report "xenia-settings" PASS "with Fill New Memory the console's memory after 30 frames is another (ramHash $ram_a without, $ram_f with)"
+	else
+		report "xenia-settings" FAIL "ramHash without [$ram_a], with [$ram_f]: $(tail -1 "$work/xs-f.err")"
+	fi
+fi
+if [ -z "$chimera_root" ] || [ ! -x "$engine" ] || [ ! -f "$package" ]; then
+	report "frontend:xenia-settings" SKIP "set CHIMERA_ROOT to a Chimera checkout with build/meson-linux/chimera-run and the package (waterbox/build-package.sh -r <it>)"
+elif [ ! -s "$container" ]; then
+	report "frontend:xenia-settings" SKIP "no test container (container:launch did not make one)"
+else
+	: > "$work/empty.movie"
+	xs() { # <name> <settings>
+		env -u DISPLAY "$engine" "$package" "$container" "$work/empty.movie" --frames 30 --record "$work/$1.movie" --settings "$2" > "$work/$1.out" 2>&1
+	}
+	xs xs-w '{"renderer":"null","cpu_speed":"4000","scribble_heap":"often"}'; xw=$?
+	xs xs-s '{"renderer":"null","cpu_speed":"4000","mount_scratch":true}'; xsc=$?
+	if [ "$xw" != 0 ] && grep -q "scribble_heap is true or false" "$work/xs-w.out" && [ "$xsc" = 0 ] && grep -q "^frames=30" "$work/xs-s.out"; then
+		report "frontend:xenia-settings" PASS "a value of the wrong kind is refused (exit $xw); with the scratch partition mounted the run goes on"
+	else
+		report "frontend:xenia-settings" FAIL "wrong kind: exit $xw [$(tail -1 "$work/xs-w.out")]; scratch: exit $xsc [$(tail -1 "$work/xs-s.out")]"
+	fi
+fi
+
 # Packages put in the console's storage before the game starts, as Xenia's
 # Install Content puts them (chimera issue 271): add-on content, title
 # updates, saved games. This repository has no package, so one is made from

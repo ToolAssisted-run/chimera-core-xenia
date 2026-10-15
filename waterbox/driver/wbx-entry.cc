@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 
+#include "suggest.h"
 #include "xenia_driver.h"
 
 #ifdef CHIMERA_GUEST
@@ -76,6 +77,63 @@ std::string json_string(const std::string& json, const char* key) {
   const size_t end = json.find('"', i + 1);
   return end == std::string::npos ? "" : json.substr(i + 1, end - i - 1);
 }
+
+// A value in a flat JSON object as it is written there, a string without its
+// quotes and its escapes: "strict", true, 80. "" when the key is not there.
+std::string json_raw(const std::string& json, const char* key) {
+  const std::string k = std::string("\"") + key + "\"";
+  const auto at = json.find(k);
+  if (at == std::string::npos) {
+    return "";
+  }
+  size_t i = json.find(':', at + k.size());
+  if (i == std::string::npos) {
+    return "";
+  }
+  i = json.find_first_not_of(" \t\r\n", i + 1);
+  if (i == std::string::npos) {
+    return "";
+  }
+  std::string out;
+  if (json[i] == '"') {
+    for (size_t j = i + 1; j < json.size() && json[j] != '"'; j++) {
+      if (json[j] == '\\' && j + 1 < json.size()) {
+        j++;
+      }
+      out += json[j];
+    }
+    return out;
+  }
+  const size_t end = json.find_first_of(",} \t\r\n", i);
+  return json.substr(i, end == std::string::npos ? std::string::npos : end - i);
+}
+
+// Xenia's settings a project may set (waterbox.config declares them under
+// these names): 's' a word, 'b' true or false, 'i' a whole number.
+struct XeniaSetting {
+  const char* name;
+  char kind;
+};
+const XeniaSetting kXeniaSettings[] = {
+    {"clear_memory_page_state", 'b'},
+    {"occlusion_query_fake_lower_threshold", 'i'},
+    {"occlusion_query_fake_upper_threshold", 'i'},
+    {"depth_bias_shader_offset", 'b'},
+    {"gamma_render_target_as_unorm16", 'b'},
+    {"gpu_allow_invalid_upload_range", 'b'},
+    {"force_depth_clamp", 'b'},
+    {"render_target_path_vulkan", 's'},
+    {"break_on_unimplemented_instructions", 'b'},
+    {"protect_zero", 'b'},
+    {"ignore_offset_for_ranged_allocations", 'b'},
+    {"scribble_heap", 'b'},
+    {"scribble_heap_value", 'i'},
+    {"xma_decoder", 's'},
+    {"use_dedicated_xma_thread", 'b'},
+    {"cl", 's'},
+    {"launch_module", 's'},
+    {"mount_scratch", 'b'},
+};
 
 // The first name in a slot of the project's slot map, or "".
 std::string slot_first(const std::string& slots, const char* id) {
@@ -196,8 +254,9 @@ CORE_EXPORT void SetVulkanBridge(uint64_t addr) {
 // For the core's own tests: put disc n in, as the game does when it asks.
 CORE_EXPORT int InsertDisc(int32_t n) { return chimera_xenia::insert_disc(static_cast<uint32_t>(n)) ? 1 : 0; }
 
-CORE_EXPORT int Init(void) {
-  const std::string slots = read_file("slots");
+namespace {
+// The game: the first file of the "game" slot, or the file opened on its own.
+std::string game_file(const std::string& slots) {
   std::string name = mounted(slot_first(slots, "game"));
   if (name.empty()) {
     name = read_file("rom.name");
@@ -206,6 +265,21 @@ CORE_EXPORT int Init(void) {
     }
     name = mounted(name);
   }
+  return name;
+}
+}  // namespace
+
+// What the core suggests for these files before any machine exists (the
+// engine's ce_suggest_settings): called INSTEAD of Init, on the same mounts.
+CORE_EXPORT const char* SuggestSettings(void) {
+  static std::string answer;
+  answer = chimera_xenia::suggest_settings(game_file(read_file("slots")));
+  return answer.c_str();
+}
+
+CORE_EXPORT int Init(void) {
+  const std::string slots = read_file("slots");
+  const std::string name = game_file(slots);
   if (name.empty()) {
     g_error = "no game: neither a \"game\" slot nor rom.name";
     return 0;
@@ -253,6 +327,37 @@ CORE_EXPORT int Init(void) {
     return 0;
   }
   options.arcade_bought = arcade != "trial";
+  // Xenia's own settings, under Xenia's names (chimera#289): each becomes the
+  // line Xenia's configuration file would have.
+  for (const XeniaSetting& x : kXeniaSettings) {
+    const std::string value = json_raw(settings, x.name);
+    if (value.empty()) {
+      continue;
+    }
+    std::string line;
+    if (x.kind == 's') {
+      line = "\"";
+      for (const char c : value) {
+        line += c == '"' || c == '\\' ? std::string("\\") + c : std::string(1, c);
+      }
+      line += "\"";
+    } else if (x.kind == 'b') {
+      if (value != "true" && value != "false") {
+        g_error = std::string("the setting ") + x.name + " is true or false, not " + value;
+        return 0;
+      }
+      line = value;
+    } else {
+      char* end = nullptr;
+      std::strtoll(value.c_str(), &end, 10);
+      if (end == value.c_str() || *end) {
+        g_error = std::string("the setting ") + x.name + " is a whole number, not " + value;
+        return 0;
+      }
+      line = value;
+    }
+    options.xenia_settings.emplace_back(x.name, line);
+  }
   for (const std::string& package : slot_all(slots, "content")) {
     options.content.push_back(mounted(package));
   }

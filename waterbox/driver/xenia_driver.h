@@ -46,6 +46,10 @@ struct Options {
   // A game on several discs: every disc after the first, in order. The game
   // asks for one by its number (chimera issue 281).
   std::vector<std::string> discs;
+  // Xenia's own settings the project sets (the ones waterbox.config declares
+  // under Xenia's names, chimera#289): the name, and the value as it is
+  // written in Xenia's configuration file ("true", "80", "\"strict\"").
+  std::vector<std::pair<std::string, std::string>> xenia_settings;
 };
 
 // Put disc n (the first is 1) in, as the game does when it asks for it. For

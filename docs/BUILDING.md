@@ -104,6 +104,13 @@ which waits by reading the clock in a loop still gives way to the others
 - a container made from the disc image's own program
   (`waterbox/tests/make-container.py`) is mounted and its program run, the
   same natively and in the sandbox, and Chimera's headless runner starts it;
+- a setting of Xenia's that a project sets reaches Xenia: with Fill New
+  Memory the console's memory is another (the runners take a project
+  setting as `--set name=value`);
+- with `CHIMERA_ROOT` set, the settings the package suggests: Mirror's
+  Edge is found by its title id (45410850) both on the disc and in the
+  container made from it; a value of the wrong kind for one of Xenia's
+  settings is refused, and the scratch partition does not stop a run;
 - with `CHIMERA_ROOT` set, the package in Chimera's headless runner
   (`chimera-run`): the picture, the picture with savestates, the refusal to
   start with no graphics card, the save data export, and that a movie has
@@ -153,3 +160,17 @@ them by name.
   `waterbox/driver/memfs.cc`.
 - A native run that never ends: `build/native` (host threads) has no clock
   of its own and a hung game hangs it. Run it under `timeout`.
+
+## The per-game settings
+
+`waterbox/driver/optimized_settings.inc` is made from a checkout of Xenia
+Manager's list, and is committed:
+
+```sh
+git clone https://github.com/xenia-manager/optimized-settings <dir>
+python3 waterbox/import-optimized-settings.py <dir> > waterbox/driver/optimized_settings.inc
+```
+
+The script names the list's commit at the top of the file. A setting of
+Xenia's that the list uses and this core does not have is left out, and the
+note the New Project window shows says why (`LEFT_OUT` in the script).

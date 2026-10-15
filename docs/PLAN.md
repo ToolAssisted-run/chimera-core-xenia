@@ -1467,3 +1467,38 @@ after frame 10 the way the game's request does (their new `--disc` and
 `--insert-disc`); natively and in the sandbox the run carries on with the
 same lines, and a disc 3 the project lacks is not put in. No game on two
 discs was tried: the request itself, from a game, was not seen.
+
+## Per-game settings from Xenia Manager's list (2026-10-15, chimera #289)
+
+The owner asked for full per-game suggestions, taken from Xenia Manager's
+list of optimized settings (github.com/xenia-manager/optimized-settings, a
+port of A1eNaz's wiki), and carried with credit and a link though the list
+states no licence (user-decided, 2026-10-15). Every value stays changeable.
+
+- **Eighteen of Xenia's settings** are the core's own now, under Xenia's
+  names (waterbox.config): the ones the list uses that change the machine or
+  its picture and that this core's Xenia has. The driver hands each to Xenia
+  as its line in a configuration file would be (`apply_xenia_setting`), so
+  Xenia reads it as it reads a game's own file; a value of the wrong kind is
+  refused with the setting's name rather than passed over.
+- **SuggestSettings** reads the title id without starting anything
+  (driver/title_id.cc): from the disc's default.xex (its execution
+  information) found in the disc's file system, or from an Arcade game's
+  container header. The four local disc images and an Arcade game read as
+  the title ids their lists and folders give. It looks the id up in the
+  list, compiled in (driver/optimized_settings.inc, 193 games, made by
+  waterbox/import-optimized-settings.py), and answers the values and a note
+  with the list's own reasons, as the RPCS3 core does with its wiki.
+- **Left out, and the note says why**: vsync and framerate_limit (a frame
+  here is always one of the console's sixty), the Direct3D 12 settings and
+  use_fuzzy_alpha_epsilon (Direct3D 12 only), the choice of renderer and
+  sound output, controller hotkeys, mount_cache, the resolution scale's
+  threshold (this core draws at the console's resolution), time_scalar
+  (the clock here is the machine's), and two settings this core's Xenia
+  does not have.
+- **mount_scratch** is one of them although upstream's desktop app, which
+  this core does not build, is what mounts the scratch partition: the
+  driver defines the setting and mounts the partition in the machine's own
+  filesystem. No game that uses it was tried (Fight Night Champion, Lost
+  Odyssey).
+- Of the 193 games, 103 get values the core can set.
