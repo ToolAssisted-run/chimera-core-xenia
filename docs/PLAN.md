@@ -1502,3 +1502,45 @@ states no licence (user-decided, 2026-10-15). Every value stays changeable.
   filesystem. No game that uses it was tried (Fight Night Champion, Lost
   Odyssey).
 - Of the 193 games, 103 get values the core can set.
+
+**Readback Resolve, offered but never suggested (user-decided, 2026-10-16).**
+The list's most common entries ask the graphics card for something and
+write its answer into the console's memory: Readback Resolve (25 games
+"fast", 47 "full"; Max Payne 3's picture is black without it) and the real
+occlusion queries (31 games). The core pins both off because the machine
+would then be one of its graphics card. Asked, the owner chose to offer
+them as settings and never set them from the list: a project is
+card-independent unless someone turns one on, and the New Project note names
+the list's value for the game. The setting's description says a movie then
+depends on the card and does not play back with the null renderer.
+
+Two things had to change for "fast" readback to be one machine even on one
+card. Upstream reads the copy made the frame before without waiting for the
+card, and the bridge fetches a mapping when it is made, so what was read
+depended on how far the card had got: each readback buffer now records the
+submission that copied into it, and a "fast" read waits for that one (it is
+nearly always finished). And the buffers are the device's, gone after a load,
+when upstream reads the current copy instead: the state now carries both
+buffers of every key with their bytes (ChimeraKeepReadbacks), and they are
+made again on the new device (ChimeraPutBackReadbacks), all in patch 0010.
+One more thing was found by making the renderer again before every frame:
+the buffers swap when a frame opens, and remaking closes the frame and
+starts the frame count again, so the frame that was open opened a second
+time and swapped them twice - and after two remakings in a row the second
+no longer knew the first had left a frame open. The swap after a remaking
+is skipped when the frame was open (or was left to be opened again), and
+the buffers' ages are counted apart from the frame count. Measured on
+Mirror's Edge with llvmpipe: "fast" readback parted from the run without
+states at frame 40, then (with the swap fixed) at frame 47, and now not at
+all over 120 frames; "full" was right throughout.
+
+**Occlusion Query is not offered yet.** "strict" is the same run twice, and
+the same in the sandbox, but not with the renderer made again: ResetZPDState
+starts every count over when the context is set up, so a query still
+counting at a load or a remaking loses what it had counted. Mirror's Edge
+asks its first query that reaches memory between frames 840 and 900, and at
+frame 898 a run with a state before every frame (or, natively, a remaking
+before every frame) has other answers than one without. Carrying a live
+query from one device to the next is its own piece of work; until then the
+note names the list's occlusion setting as not offered, and Occlusion Query
+Full Counters and Readback Memexport wait with it.

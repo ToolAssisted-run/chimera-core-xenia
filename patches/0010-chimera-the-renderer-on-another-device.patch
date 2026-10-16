@@ -176,10 +176,10 @@ index 2b5675789..820703f47 100644
    // Uploads a range of host pages - only called if host GPU sparse memory
    // allocation succeeded if needed. While uploading, MakeRangeValid must be
 diff --git a/src/xenia/gpu/vulkan/vulkan_command_processor.cc b/src/xenia/gpu/vulkan/vulkan_command_processor.cc
-index 65bb0e38a..ef4cb6a39 100644
+index 65bb0e38a..a48ad71d1 100644
 --- a/src/xenia/gpu/vulkan/vulkan_command_processor.cc
 +++ b/src/xenia/gpu/vulkan/vulkan_command_processor.cc
-@@ -122,6 +122,135 @@ void VulkanCommandProcessor::InitializeShaderStorage(
+@@ -122,6 +122,214 @@ void VulkanCommandProcessor::InitializeShaderStorage(
  
  void VulkanCommandProcessor::RestoreEdramSnapshot(const void* snapshot) {}
  
@@ -287,6 +287,84 @@ index 65bb0e38a..ef4cb6a39 100644
 +  }
 +  dfn.vkDestroyBuffer(device, buffer, nullptr);
 +  dfn.vkFreeMemory(device, memory, nullptr);
++  if (chimera_kept_) {
++    ChimeraKeepReadbacks();
++  }
++}
++
++void VulkanCommandProcessor::ChimeraKeepReadbacks() {
++  chimera_kept_readbacks_.clear();
++  // a frame the last remaking left to be opened again is still the open one
++  chimera_kept_frame_open_ = frame_open_ || chimera_skip_readback_flip_;
++  const ui::vulkan::VulkanDevice* const vulkan_device = GetVulkanDevice();
++  const ui::vulkan::VulkanDevice::Functions& dfn = vulkan_device->functions();
++  const VkDevice device = vulkan_device->device();
++  // every submission has completed (ChimeraKeepDeviceState waited for them)
++  for (const auto& [key, rb] : readback_buffers_) {
++    ChimeraKeptReadback kept;
++    kept.key = key;
++    kept.current_index = rb.current_index;
++    kept.last_used_frame = rb.last_used_frame;
++    for (int i = 0; i < 2; ++i) {
++      if (rb.buffers[i] == VK_NULL_HANDLE || !rb.sizes[i]) {
++        continue;
++      }
++      void* mapping;
++      if (dfn.vkMapMemory(device, rb.memories[i], 0, rb.sizes[i], 0,
++                          &mapping) != VK_SUCCESS) {
++        continue;
++      }
++      VkMappedMemoryRange read = {VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};
++      read.memory = rb.memories[i];
++      read.size = VK_WHOLE_SIZE;
++      dfn.vkInvalidateMappedMemoryRanges(device, 1, &read);
++      const uint8_t* bytes = static_cast<const uint8_t*>(mapping);
++      kept.bytes[i].assign(bytes, bytes + rb.sizes[i]);
++      kept.sizes[i] = rb.sizes[i];
++      dfn.vkUnmapMemory(device, rb.memories[i]);
++    }
++    chimera_kept_readbacks_.push_back(std::move(kept));
++  }
++}
++
++void VulkanCommandProcessor::ChimeraPutBackReadbacks() {
++  // the frame that was open is opened again, and must not flip the buffers
++  // a second time
++  chimera_skip_readback_flip_ = chimera_kept_frame_open_ && !frame_open_;
++  const ui::vulkan::VulkanDevice* const vulkan_device = GetVulkanDevice();
++  const ui::vulkan::VulkanDevice::Functions& dfn = vulkan_device->functions();
++  const VkDevice device = vulkan_device->device();
++  for (const ChimeraKeptReadback& kept : chimera_kept_readbacks_) {
++    ReadbackBuffer& rb = readback_buffers_[kept.key];
++    rb.current_index = kept.current_index;
++    rb.last_used_frame = kept.last_used_frame;
++    for (int i = 0; i < 2; ++i) {
++      if (!kept.sizes[i]) {
++        continue;
++      }
++      VkBuffer buffer;
++      VkDeviceMemory memory;
++      if (!ui::vulkan::util::CreateDedicatedAllocationBuffer(
++              vulkan_device, kept.sizes[i], VK_BUFFER_USAGE_TRANSFER_DST_BIT,
++              ui::vulkan::util::MemoryPurpose::kReadback, buffer, memory)) {
++        continue;
++      }
++      void* mapping;
++      if (dfn.vkMapMemory(device, memory, 0, VK_WHOLE_SIZE, 0, &mapping) ==
++          VK_SUCCESS) {
++        std::memcpy(mapping, kept.bytes[i].data(), kept.sizes[i]);
++        VkMappedMemoryRange written = {VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};
++        written.memory = memory;
++        written.size = VK_WHOLE_SIZE;
++        dfn.vkFlushMappedMemoryRanges(device, 1, &written);
++        dfn.vkUnmapMemory(device, memory);
++      }
++      rb.buffers[i] = buffer;
++      rb.memories[i] = memory;
++      rb.sizes[i] = kept.sizes[i];
++      rb.submissions[i] = 0;
++    }
++  }
 +}
 +
 +void VulkanCommandProcessor::ChimeraPutBackDeviceState() {
@@ -302,6 +380,7 @@ index 65bb0e38a..ef4cb6a39 100644
 +  if (!chimera_kept_edram_.empty()) {
 +    render_target_cache_->ChimeraPutEdramBack(chimera_kept_edram_.data());
 +  }
++  ChimeraPutBackReadbacks();
 +  // The submission stays open: the next draw carries on in it.
 +}
 +
@@ -315,8 +394,72 @@ index 65bb0e38a..ef4cb6a39 100644
  std::string VulkanCommandProcessor::GetWindowTitleText() const {
    std::ostringstream title;
    title << "Vulkan";
+@@ -3296,7 +3504,7 @@ bool VulkanCommandProcessor::IssueCopy() {
+     uint64_t resolve_key =
+         MakeReadbackResolveKey(written_address, written_length);
+     ReadbackBuffer& rb = readback_buffers_[resolve_key];
+-    rb.last_used_frame = frame_current_;
++    rb.last_used_frame = chimera_readback_frame_;
+ 
+     uint32_t write_index = rb.current_index;
+     uint32_t size = AlignReadbackBufferSize(readback_length);
+@@ -3570,6 +3778,8 @@ bool VulkanCommandProcessor::IssueCopy() {
+           shared_memory_->buffer(), rb.buffers[write_index], 1, &copy_region);
+     }
+ 
++    rb.submissions[write_index] = GetCurrentSubmission();
++
+     if (readback_mode != ReadbackResolveMode::kFast) {
+       // Wait for GPU to finish (accurate but slow)
+       if (!AwaitAllQueueOperationsCompletion()) {
+@@ -3588,6 +3798,13 @@ bool VulkanCommandProcessor::IssueCopy() {
+             "resolve readback fallback");
+         return true;
+       }
++    } else if (rb.submissions[read_index] > GetCompletedSubmission()) {
++      // chimera: the copy into the buffer read now was made by an earlier
++      // submission, which the card may not have finished: wait for it, so
++      // that what is read is that copy and never the moment the card had got
++      // to (a mapping is fetched when it is made). Upstream reads whatever
++      // is there.
++      CheckSubmissionCompletionAndDeviceLoss(rb.submissions[read_index]);
+     }
+ 
+     if (rb.buffers[read_index] != VK_NULL_HANDLE &&
+@@ -4387,9 +4604,16 @@ bool VulkanCommandProcessor::BeginSubmission(bool is_guest_command) {
+   if (is_opening_frame) {
+     frame_open_ = true;
+ 
+-    // Swap all readback buffers for delayed sync (one frame behind)
+-    for (auto& pair : readback_buffers_) {
+-      pair.second.current_index = 1 - pair.second.current_index;
++    // Swap all readback buffers for delayed sync (one frame behind) - unless
++    // this frame was already open when the renderer was made again, and its
++    // flip already done (chimera)
++    if (chimera_skip_readback_flip_) {
++      chimera_skip_readback_flip_ = false;
++    } else {
++      ++chimera_readback_frame_;
++      for (auto& pair : readback_buffers_) {
++        pair.second.current_index = 1 - pair.second.current_index;
++      }
+     }
+ 
+     // Evict old readback buffers only when map gets too large to prevent
+@@ -4403,9 +4627,9 @@ bool VulkanCommandProcessor::BeginSubmission(bool is_guest_command) {
+       for (auto it = readback_buffers_.begin();
+            it != readback_buffers_.end();) {
+         // Evict if not used recently
+-        if (frame_current_ > kReadbackBufferEvictionAgeFrames &&
++        if (chimera_readback_frame_ > kReadbackBufferEvictionAgeFrames &&
+             it->second.last_used_frame <
+-                frame_current_ - kReadbackBufferEvictionAgeFrames) {
++                chimera_readback_frame_ - kReadbackBufferEvictionAgeFrames) {
+           // Release both buffers and memories
+           ui::vulkan::util::DestroyAndNullHandle(dfn.vkDestroyBuffer, device,
+                                                  it->second.buffers[0]);
 diff --git a/src/xenia/gpu/vulkan/vulkan_command_processor.h b/src/xenia/gpu/vulkan/vulkan_command_processor.h
-index dc63a3ce1..9270dba49 100644
+index dc63a3ce1..3f3b8b1d0 100644
 --- a/src/xenia/gpu/vulkan/vulkan_command_processor.h
 +++ b/src/xenia/gpu/vulkan/vulkan_command_processor.h
 @@ -153,6 +153,14 @@ class VulkanCommandProcessor final : public CommandProcessor {
@@ -334,7 +477,7 @@ index dc63a3ce1..9270dba49 100644
    void PollCompletedSubmission() override;
  
    ui::vulkan::VulkanDevice* GetVulkanDevice() const {
-@@ -531,6 +539,14 @@ class VulkanCommandProcessor final : public CommandProcessor {
+@@ -531,6 +539,37 @@ class VulkanCommandProcessor final : public CommandProcessor {
  
    bool device_lost_ = false;
  
@@ -345,10 +488,43 @@ index dc63a3ce1..9270dba49 100644
 +  std::vector<std::pair<uint32_t, uint32_t>> chimera_kept_ranges_;
 +  std::vector<uint8_t> chimera_kept_bytes_;
 +  std::vector<uint8_t> chimera_kept_edram_;
++  // chimera: the resolve readback buffers as they were, both of each key's
++  // with their bytes, made again on the new device after a load - so that a
++  // "fast" readback, which reads the copy made a frame before, reads after a
++  // load what it would have read without one (ChimeraKeepReadbacks,
++  // ChimeraPutBackReadbacks).
++  struct ChimeraKeptReadback {
++    uint64_t key = 0;
++    uint32_t current_index = 0;
++    uint64_t last_used_frame = 0;
++    uint32_t sizes[2] = {0, 0};
++    std::vector<uint8_t> bytes[2];
++  };
++  std::vector<ChimeraKeptReadback> chimera_kept_readbacks_;
++  // chimera: the readback buffers' own count of frames, and whether a frame
++  // was open when they were kept. ShutdownContext starts frame_current_ again
++  // and closes the frame, so after the renderer is made again the frame that
++  // was open is opened a second time: its flip of the buffers is skipped, and
++  // ages are counted here, where the remaking does not reach.
++  uint64_t chimera_readback_frame_ = 1;
++  bool chimera_kept_frame_open_ = false;
++  bool chimera_skip_readback_flip_ = false;
++  void ChimeraKeepReadbacks();
++  void ChimeraPutBackReadbacks();
 +
    bool cache_clear_requested_ = false;
  
    // Host shader types that guest shaders can be translated into - they can
+@@ -858,6 +897,9 @@ class VulkanCommandProcessor final : public CommandProcessor {
+     uint32_t sizes[2] = {0, 0};
+     uint32_t current_index = 0;
+     uint64_t last_used_frame = 0;
++    // chimera: the submission that copied into each buffer, which a "fast"
++    // readback waits for before it reads the buffer
++    uint64_t submissions[2] = {0, 0};
+   };
+   // Map: (written_address << 32 | written_length) -> ReadbackBuffer
+   std::unordered_map<uint64_t, ReadbackBuffer> readback_buffers_;
 diff --git a/src/xenia/gpu/vulkan/vulkan_graphics_system.cc b/src/xenia/gpu/vulkan/vulkan_graphics_system.cc
 index 3c80d766a..a9734a48c 100644
 --- a/src/xenia/gpu/vulkan/vulkan_graphics_system.cc

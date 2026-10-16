@@ -217,6 +217,41 @@ else
 	fi
 fi
 
+# Readback Resolve (chimera#289). A project may turn it on, and the console's
+# memory then holds what the graphics card drew: the machine is one of its
+# card. On one card it must still be ONE machine. Upstream's "fast" readback
+# reads the copy made a frame before without waiting for the card, and a
+# buffer made on the device a load replaced is gone: here it waits for that
+# copy, and a state carries both buffers. With "fast": two native runs are
+# one, a state saved and loaded before every frame in the sandbox changes
+# nothing, and the run is another than without the setting.
+# (`card`, not `name`: native and sandbox set a `name` of their own.)
+if [ "$have_native" = 0 ] || [ "$have_sandbox" = 0 ] || [ ! -s "$work/m0.out" ]; then
+	report "card:readback" SKIP "no Vulkan run to hold it to (picture:remade did not run)"
+else
+	for leg in "readback readback_resolve=fast"; do
+		card="${leg%% *}"; set_="${leg#* }"
+		native "$card-a" --frames "$short" --every 20 --renderer vulkan --set "$set_"
+		native "$card-b" --frames "$short" --every 20 --renderer vulkan --set "$set_"
+		sandbox "$card-r" --frames "$short" --every 20 --renderer vulkan --set "$set_" --rerecord
+		# what differs from the run without the setting: the console's memory
+		# for a readback; Mirror's Edge asks no occlusion query that reaches
+		# memory in these frames, and only the GPU's registers move then
+		moved=""
+		for d in ramHash busHash videoHash; do
+			off="$(sed -n "\$s/.* $d=\([0-9a-f]*\).*/\1/p" "$work/m0.out")"
+			on="$(sed -n "\$s/.* $d=\([0-9a-f]*\).*/\1/p" "$work/$card-a.out")"
+			[ -n "$on" ] && [ "$on" != "$off" ] && moved="$moved $d"
+		done
+		if [ -s "$work/$card-a.out" ] && cmp -s "$work/$card-a.out" "$work/$card-b.out" &&
+			cmp -s "$work/$card-a.out" "$work/$card-r.out" && [ -n "$moved" ]; then
+			report "card:$card" PASS "$set_: two runs are one, a state around every frame changes nothing, and the run is another than without it (differs in:$moved)"
+		else
+			report "card:$card" FAIL "$set_: twice [$(last "$work/$card-a.out")] [$(last "$work/$card-b.out")] with states [$(last "$work/$card-r.out")] without [$(last "$work/m0.out")] $(tail -1 "$work/$card-r.err")"
+		fi
+	done
+fi
+
 # The package in the frontend's own engine (chimera-run, from a Chimera
 # checkout named by CHIMERA_ROOT that has the package installed by
 # waterbox/build-package.sh and an engine with the Vulkan bridge):

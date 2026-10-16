@@ -497,7 +497,11 @@ bool switch_on(const Options& options, std::string& error) {
   xe::gpu::SetZPDMode("fake");
   xe::gpu::SetReadbackResolveMode("none");
   // Then the project's own choices of Xenia's settings, each read as its
-  // line in Xenia's configuration file would be (chimera#289).
+  // line in Xenia's configuration file would be (chimera#289). A project can
+  // turn Readback Resolve on: the machine is then one of its graphics card,
+  // which the setting's description says. The real occlusion queries are not
+  // offered yet: a query still counting when the renderer is made again (at
+  // every load) loses its count, as ResetZPDState starts it over.
   for (const auto& [name, value] : options.xenia_settings) {
     if (!apply_xenia_setting(name, value, error)) {
       return false;

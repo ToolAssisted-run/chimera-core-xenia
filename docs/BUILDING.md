@@ -107,6 +107,10 @@ which waits by reading the clock in a loop still gives way to the others
 - a setting of Xenia's that a project sets reaches Xenia: with Fill New
   Memory the console's memory is another (the runners take a project
   setting as `--set name=value`);
+- with the Vulkan renderer and Readback Resolve "fast": two native runs are
+  one, a state saved and loaded before every frame in the sandbox changes
+  nothing, and the run is another than without the setting
+  (`card:readback`);
 - with `CHIMERA_ROOT` set, the settings the package suggests: Mirror's
   Edge is found by its title id (45410850) both on the disc and in the
   container made from it; a value of the wrong kind for one of Xenia's

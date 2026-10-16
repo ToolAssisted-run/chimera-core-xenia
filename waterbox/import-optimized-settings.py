@@ -54,7 +54,13 @@ SETTINGS = {
 CARD = {"readback_resolve", "occlusion_query", "occlusion_query_full_counters", "readback_memexport"}
 CARD_SAFE = {("occlusion_query", "fake"), ("readback_resolve", "none"), ("occlusion_query_full_counters", False),
              ("readback_memexport", False)}
-# "suggest": suggested like any other; "note": named in the note, not set.
+# Of those, the ones the core offers as settings; the real occlusion queries
+# are not offered yet (a query counting when the renderer is made again
+# loses its count).
+OFFERED_CARD = {"Readback Resolve"}
+# "suggest": suggested like any other; "note": named in the note, not set -
+# the owner's choice: offered as settings, never set by the suggestion
+# (user-decided, 2026-10-16).
 CARD_POLICY = "note"
 
 # Settings the core does not have, and why, in the note's words.
@@ -156,10 +162,15 @@ def main():
         note = f"Xenia Manager's optimized settings for {title}."
         if parts:
             note += " Set: " + "; ".join(parts) + "."
-        if card:
+        offered = [x for x in card if x[0] in OFFERED_CARD]
+        held = [x for x in card if x[0] not in OFFERED_CARD]
+        if offered:
             note += " Not set, because the console would then hold what your graphics card draws, and a movie " \
-                    "would play back only on this card: " + "; ".join(
-                        f"{k} {v}" + (f" ({fix[0].lower() + fix[1:]})" if fix else "") for k, v, fix in card) + "."
+                    "might play back differently on another card (set it below yourself if the game needs it): " + "; ".join(
+                        f"{k} {v}" + (f" ({fix[0].lower() + fix[1:]})" if fix else "") for k, v, fix in offered) + "."
+        if held:
+            note += " Not offered by this core yet: " + "; ".join(
+                f"{k} {v}" + (f" ({fix[0].lower() + fix[1:]})" if fix else "") for k, v, fix in held) + "."
         if out:
             note += " Not used here: " + "; ".join(f"{k} = {v}, as {r}" for k, v, r in out) + "."
         rows.append((tid, title, json.dumps(values, separators=(",", ":")), note))

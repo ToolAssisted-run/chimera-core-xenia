@@ -64,6 +64,10 @@ Data... writes, put back the same way.
   (a port of [A1eNaz's wiki](https://github.com/A1eNaz/Xenia-Game-Settings/wiki))
   if the game is in that list, and says what it set and why. Each can still
   be changed.
+- **Readback Resolve**: for the games that read back what the graphics card
+  drew (Max Payne 3's picture is black without it). Off by default and never
+  set by the New Project window: with it on, a movie depends on your
+  graphics card and does not play back with the null renderer.
 
 ## Building and testing
 
