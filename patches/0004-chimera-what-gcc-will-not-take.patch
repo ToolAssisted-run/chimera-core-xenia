@@ -38,7 +38,7 @@ index 7f135c0b8..ec0f97214 100644
  static void mvdir64b(void* to, const void* from) {
    __asm__("movdir64b %1, %0" : : "r"(to), "m"(*(char*)from) : "memory");
 diff --git a/src/xenia/gpu/command_processor.h b/src/xenia/gpu/command_processor.h
-index dfe42737f..bd488d9d3 100644
+index dfe42737f..996ae2303 100644
 --- a/src/xenia/gpu/command_processor.h
 +++ b/src/xenia/gpu/command_processor.h
 @@ -20,6 +20,7 @@
@@ -125,7 +125,34 @@ index dfe42737f..bd488d9d3 100644
    virtual void WriteRegisterRangeFromRing(xe::RingBuffer* ring, uint32_t base,
                                            uint32_t num_registers);
  
-@@ -595,6 +640,8 @@ class CommandProcessor {
+@@ -418,6 +463,26 @@ class CommandProcessor {
+         memory_->TranslatePhysical<xenos::xe_gpu_depth_sample_counts*>(
+             report_address));
+   }
++  // chimera: what the occlusion queries have counted, and owe the guest, as
++  // the context holds it - kept through ChimeraRemakeContext, which would
++  // otherwise start every count over (ResetZPDState). It is the machine's:
++  // the guest is owed these sample counts whichever device drew them.
++  struct ChimeraZPDState {
++    ReportHandle next_report_handle = 1;
++    ZPDReport current_report;
++    bool segment_pending_begin = false;
++    std::deque<ZPDReport> reports;
++    uint32_t awaited_report_count = 0;
++    std::unordered_map<uint32_t, XenosZPDReport> fast_cached_deltas;
++    XenosZPDReport sample_counter;
++    XenosZPDReport speculative_sample_counter;
++    uint32_t fake_sample_count = 0;
++    uint64_t pending_retire_start_ms = 0;
++    bool force_fake_fallback = false;
++  };
++  ChimeraZPDState ChimeraTakeZPDState();
++  void ChimeraPutZPDStateBack(ChimeraZPDState&& kept);
++
+   void ResetZPDState() {
+     zpd_mode_ = GetZPDMode();
+     active_segment_ = {};
+@@ -595,6 +660,8 @@ class CommandProcessor {
    kernel::object_ref<kernel::XHostThread> worker_thread_;
  
    std::queue<std::function<void()>> pending_fns_;

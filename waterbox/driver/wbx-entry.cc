@@ -133,9 +133,12 @@ const XeniaSetting kXeniaSettings[] = {
     {"cl", 's'},
     {"launch_module", 's'},
     {"mount_scratch", 'b'},
-    // makes the console hold what the graphics card draws; applied after the
-    // core's own choice of it (xenia_driver.cc)
+    // these make the console hold what the graphics card draws; applied
+    // after the core's own choices of them (xenia_driver.cc)
     {"readback_resolve", 's'},
+    {"occlusion_query", 's'},
+    {"occlusion_query_full_counters", 'b'},
+    {"readback_memexport", 'b'},
 };
 
 // The first name in a slot of the project's slot map, or "".

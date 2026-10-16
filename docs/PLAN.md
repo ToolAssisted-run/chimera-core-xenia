@@ -1534,13 +1534,41 @@ Mirror's Edge with llvmpipe: "fast" readback parted from the run without
 states at frame 40, then (with the swap fixed) at frame 47, and now not at
 all over 120 frames; "full" was right throughout.
 
-**Occlusion Query is not offered yet.** "strict" is the same run twice, and
-the same in the sandbox, but not with the renderer made again: ResetZPDState
-starts every count over when the context is set up, so a query still
-counting at a load or a remaking loses what it had counted. Mirror's Edge
-asks its first query that reaches memory between frames 840 and 900, and at
-frame 898 a run with a state before every frame (or, natively, a remaking
-before every frame) has other answers than one without. Carrying a live
-query from one device to the next is its own piece of work; until then the
-note names the list's occlusion setting as not offered, and Occlusion Query
-Full Counters and Readback Memexport wait with it.
+**Occlusion Query, offered too (2026-10-16).** "strict" was the same run
+twice, and the same in the sandbox, but not with the renderer made again:
+Mirror's Edge asks its first query that reaches memory between frames 840
+and 900, and at frame 898 a run with a state before every frame (or,
+natively, a remaking before every frame) had other answers than one
+without. Two things were wrong.
+
+- Setting the context up again starts every count over (ResetZPDState), so
+  a query still counting at a load or a remaking lost what it had counted.
+  The counts, the reports waiting for their answers and the open report now
+  outlive the context (ChimeraTakeZPDState and ChimeraPutZPDStateBack, patches
+  0004 and 0010). A state save first waits for every answer, so nothing is
+  left half counted on the device that goes away.
+- That alone changed nothing, which is how the second one was found: one
+  piece of a report counted 532480 samples (1280 by 416) in the run without
+  remaking and 0 after it. Upstream resumes a waiting query whenever a
+  render pass begins, including the passes in which Xenia copies EDRAM
+  contents from one of its own render targets to another and clears them
+  after a resolve. Those copies are quads that pass every test, the Xbox 360
+  never drew them, and which copies there are depends on where the host
+  render targets are - after a load the EDRAM is put back as one big render
+  target, and the copies are others. Now only the pass a guest draw enters
+  resumes a waiting query (patch 0010).
+
+Ruled out on the way: the host's depth precision (the guest draws use the
+24-bit float depth format, kept as 32-bit floats on the host; converting in
+the pixel shader made no difference) and pipelines made in the background
+(the core makes them on the spot). Measured on Mirror's Edge with llvmpipe,
+900 frames: the run with a remaking before every frame now ends with the
+console's memory of the run without (ramHash 879f2c73ff33e0c6), and so does
+Occlusion Query Full Counters. The gate's card:occlusion holds it, with a
+state saved after frame 820 and carried on with a state around every frame.
+Readback Memexport is offered the same way. It copies what a draw's
+shaders wrote back into the console's memory and waits for the card at
+that draw, so nothing of it is left on the device for a load to lose. The
+two games of the list that want it (Splinter Cell: Conviction and
+Blacklist) were not tried; Mirror's Edge ends 300 frames with the same
+memory with it on as off.

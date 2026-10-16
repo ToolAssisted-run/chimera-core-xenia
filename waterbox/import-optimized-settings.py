@@ -54,10 +54,8 @@ SETTINGS = {
 CARD = {"readback_resolve", "occlusion_query", "occlusion_query_full_counters", "readback_memexport"}
 CARD_SAFE = {("occlusion_query", "fake"), ("readback_resolve", "none"), ("occlusion_query_full_counters", False),
              ("readback_memexport", False)}
-# Of those, the ones the core offers as settings; the real occlusion queries
-# are not offered yet (a query counting when the renderer is made again
-# loses its count).
-OFFERED_CARD = {"Readback Resolve"}
+# Of those, the ones the core offers as settings: all of them.
+OFFERED_CARD = {"Readback Resolve", "Occlusion Query", "Occlusion Query Full Counters", "Readback Memexport"}
 # "suggest": suggested like any other; "note": named in the note, not set -
 # the owner's choice: offered as settings, never set by the suggestion
 # (user-decided, 2026-10-16).

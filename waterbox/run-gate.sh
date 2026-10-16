@@ -252,6 +252,38 @@ else
 	done
 fi
 
+# Occlusion Query (chimera#289). With "strict" the console asks the graphics
+# card how many samples of some draws passed the depth test, and the answer
+# lands in its memory; Mirror's Edge first asks in a way that changes its
+# memory between frames 840 and 900. A load makes the renderer again on a
+# new device, and the answers must be those of a run that never loaded: what
+# was counted before the load is kept, and the copies Xenia makes between its
+# own render targets are not counted (the console never drew them, and after
+# a load they are other copies - a 1280x416 copy was counted once). The run
+# with the renderer made again before every frame is the run without; a
+# state saved after frame 820 and carried on with a state saved and loaded
+# before every frame ends where they end; and the run is another than with
+# the default "fake".
+oq=900; oq_at=820
+if [ "$have_native" = 0 ] || [ "$have_sandbox" = 0 ] || [ ! -s "$work/m0.out" ]; then
+	report "card:occlusion" SKIP "no Vulkan run to hold it to (picture:remade did not run)"
+else
+	strict="occlusion_query=strict"
+	native oq-a --frames "$oq" --every 60 --renderer vulkan --set "$strict"
+	native oq-m --frames "$oq" --every 60 --renderer vulkan --set "$strict" --remake-every 1
+	native oq-f --frames "$oq" --every 60 --renderer vulkan
+	sandbox oq-s --frames "$oq" --renderer vulkan --set "$strict" --save-state "$work/oq.state" --at "$oq_at"
+	sandbox oq-r --frames "$oq" --every 60 --renderer vulkan --set "$strict" --state "$work/oq.state" --rerecord
+	strict_ram="$(sed -n '$s/.* ramHash=\([0-9a-f]*\).*/\1/p' "$work/oq-a.out")"
+	fake_ram="$(sed -n '$s/.* ramHash=\([0-9a-f]*\).*/\1/p' "$work/oq-f.out")"
+	if [ -s "$work/oq-a.out" ] && grep -q "^end frame=$oq " "$work/oq-a.out" && cmp -s "$work/oq-a.out" "$work/oq-m.out" &&
+		[ "$(last "$work/oq-r.out")" = "$(last "$work/oq-a.out")" ] && [ -n "$strict_ram" ] && [ -n "$fake_ram" ] && [ "$strict_ram" != "$fake_ram" ]; then
+		report "card:occlusion" PASS "$strict: the renderer made again before each of $oq frames changes nothing, nor states around every frame after frame $oq_at, and the console's memory is another than with fake answers: $(last "$work/oq-a.out")"
+	else
+		report "card:occlusion" FAIL "$strict: unbroken [$(last "$work/oq-a.out")] made again [$(last "$work/oq-m.out")] with states [$(last "$work/oq-r.out")] fake [$(last "$work/oq-f.out")] $(tail -1 "$work/oq-r.err")"
+	fi
+fi
+
 # The package in the frontend's own engine (chimera-run, from a Chimera
 # checkout named by CHIMERA_ROOT that has the package installed by
 # waterbox/build-package.sh and an engine with the Vulkan bridge):

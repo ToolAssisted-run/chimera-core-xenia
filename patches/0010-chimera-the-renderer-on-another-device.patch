@@ -1,8 +1,8 @@
 diff --git a/src/xenia/gpu/command_processor.cc b/src/xenia/gpu/command_processor.cc
-index eadd8f5d1..c900844f9 100644
+index eadd8f5d1..9dd31d841 100644
 --- a/src/xenia/gpu/command_processor.cc
 +++ b/src/xenia/gpu/command_processor.cc
-@@ -338,6 +338,59 @@ void CommandProcessor::CallInThread(std::function<void()> fn) {
+@@ -338,6 +338,107 @@ void CommandProcessor::CallInThread(std::function<void()> fn) {
  
  void CommandProcessor::ClearCaches() {}
  
@@ -36,6 +36,13 @@ index eadd8f5d1..c900844f9 100644
 +  if (active_pixel_shader_) {
 +    pixel_ucode = active_pixel_shader_->ucode_data();
 +  }
++  // What the occlusion queries had counted outlives the context (it is
++  // gathered: a submission's end closes the open segment, and the fetch
++  // above, or the one made when the state being loaded was saved, waited for
++  // every resolve and took it in). Without this a query still counting lost
++  // its count, and a run with a load had other answers (Mirror's Edge with
++  // strict queries, frame 898).
++  ChimeraZPDState zpd = ChimeraTakeZPDState();
 +  ShutdownContext();
 +  active_vertex_shader_ = nullptr;
 +  active_pixel_shader_ = nullptr;
@@ -46,6 +53,7 @@ index eadd8f5d1..c900844f9 100644
 +    xe::FatalError("Unable to set the command processor up on a new device");
 +    return;
 +  }
++  ChimeraPutZPDStateBack(std::move(zpd));
 +  if (!vertex_ucode.empty()) {
 +    active_vertex_shader_ =
 +        LoadShader(xenos::ShaderType::kVertex, 0, vertex_ucode.data(),
@@ -59,10 +67,50 @@ index eadd8f5d1..c900844f9 100644
 +  ChimeraPutBackDeviceState();
 +}
 +
++CommandProcessor::ChimeraZPDState CommandProcessor::ChimeraTakeZPDState() {
++  ChimeraZPDState kept;
++  kept.next_report_handle = zpd_next_report_handle_;
++  kept.current_report = zpd_current_report_;
++  // a segment still open on the device is lost with it; its report resumes
++  // at the next draw, as it does after a render pass ends
++  kept.segment_pending_begin =
++      active_segment_.segment_pending_begin ||
++      (active_segment_.segment_active && active_segment_.report);
++  kept.reports = std::move(zpd_reports_);
++  kept.awaited_report_count = zpd_awaited_report_count_;
++  kept.fast_cached_deltas = std::move(fast_zpd_report_cached_deltas_);
++  kept.sample_counter = zpd_sample_counter_;
++  kept.speculative_sample_counter = zpd_speculative_sample_counter_;
++  kept.fake_sample_count = fake_zpd_sample_count_;
++  kept.pending_retire_start_ms = zpd_pending_retire_start_ms_;
++  kept.force_fake_fallback = zpd_force_fake_fallback_;
++  return kept;
++}
++
++void CommandProcessor::ChimeraPutZPDStateBack(ChimeraZPDState&& kept) {
++  zpd_next_report_handle_ = kept.next_report_handle;
++  zpd_current_report_ = kept.current_report;
++  active_segment_.segment_pending_begin = kept.segment_pending_begin;
++  zpd_reports_ = std::move(kept.reports);
++  zpd_awaited_report_count_ = kept.awaited_report_count;
++  fast_zpd_report_cached_deltas_ = std::move(kept.fast_cached_deltas);
++  zpd_sample_counter_ = kept.sample_counter;
++  zpd_speculative_sample_counter_ = kept.speculative_sample_counter;
++  fake_zpd_sample_count_ = kept.fake_sample_count;
++  zpd_pending_retire_start_ms_ = kept.pending_retire_start_ms;
++  zpd_force_fake_fallback_ = kept.force_fake_fallback;
++  // A resolve the old device never delivered never will be: the segments
++  // it measured are counted as nothing, so the report can retire.
++  zpd_current_report_.pending_segments = 0;
++  for (ZPDReport& report : zpd_reports_) {
++    report.pending_segments = 0;
++  }
++}
++
  void CommandProcessor::SetDesiredSwapPostEffect(
      SwapPostEffect swap_post_effect) {
    if (swap_post_effect_desired_ == swap_post_effect) {
-@@ -354,6 +407,7 @@ void CommandProcessor::WorkerThreadMain() {
+@@ -354,6 +455,7 @@ void CommandProcessor::WorkerThreadMain() {
      xe::FatalError("Unable to setup command processor internal state");
      return;
    }
@@ -70,7 +118,7 @@ index eadd8f5d1..c900844f9 100644
  
    while (worker_running_) {
      while (!pending_fns_.empty()) {
-@@ -369,6 +423,8 @@ void CommandProcessor::WorkerThreadMain() {
+@@ -369,6 +471,8 @@ void CommandProcessor::WorkerThreadMain() {
        // We spin here waiting for new ones, as the overhead of waiting on our
        // event is too high.
        PrepareForWait();
@@ -79,7 +127,7 @@ index eadd8f5d1..c900844f9 100644
        uint32_t loop_count = 0;
        do {
          // If we spin around too much, revert to a "low-power" state.
-@@ -389,6 +445,7 @@ void CommandProcessor::WorkerThreadMain() {
+@@ -389,6 +493,7 @@ void CommandProcessor::WorkerThreadMain() {
        } while (worker_running_ && pending_fns_.empty() &&
                 (write_ptr_index == 0xBAADF00D ||
                  read_ptr_index_ == write_ptr_index));
@@ -176,7 +224,7 @@ index 2b5675789..820703f47 100644
    // Uploads a range of host pages - only called if host GPU sparse memory
    // allocation succeeded if needed. While uploading, MakeRangeValid must be
 diff --git a/src/xenia/gpu/vulkan/vulkan_command_processor.cc b/src/xenia/gpu/vulkan/vulkan_command_processor.cc
-index 65bb0e38a..a48ad71d1 100644
+index 65bb0e38a..f2de5d887 100644
 --- a/src/xenia/gpu/vulkan/vulkan_command_processor.cc
 +++ b/src/xenia/gpu/vulkan/vulkan_command_processor.cc
 @@ -122,6 +122,214 @@ void VulkanCommandProcessor::InitializeShaderStorage(
@@ -394,7 +442,36 @@ index 65bb0e38a..a48ad71d1 100644
  std::string VulkanCommandProcessor::GetWindowTitleText() const {
    std::ostringstream title;
    title << "Vulkan";
-@@ -3296,7 +3504,7 @@ bool VulkanCommandProcessor::IssueCopy() {
+@@ -1991,7 +2199,7 @@ bool VulkanCommandProcessor::SubmitBarriers(bool force_end_render_pass) {
+ 
+ void VulkanCommandProcessor::SubmitBarriersAndEnterRenderTargetCacheRenderPass(
+     VkRenderPass render_pass,
+-    const VulkanRenderTargetCache::Framebuffer* framebuffer) {
++    const VulkanRenderTargetCache::Framebuffer* framebuffer, bool guest_draw) {
+   SubmitBarriers(false);
+   if (current_render_pass_ == render_pass &&
+       current_framebuffer_ == framebuffer) {
+@@ -2031,7 +2239,9 @@ void VulkanCommandProcessor::SubmitBarriersAndEnterRenderTargetCacheRenderPass(
+       (framebuffer->render_pass_key.depth_and_color_used & 1) != 0);
+ 
+   // Resume any pending ZPD segment now that the pass is open.
+-  OpenQuerySegment(false);
++  if (guest_draw) {
++    OpenQuerySegment(false);
++  }
+ }
+ 
+ void VulkanCommandProcessor::EndRenderPass() {
+@@ -3001,7 +3211,7 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type,
+       active_segment_.hybrid ? active_query_index_ : UINT32_MAX;
+   SubmitBarriersAndEnterRenderTargetCacheRenderPass(
+       render_target_cache_->last_update_render_pass(),
+-      render_target_cache_->last_update_framebuffer());
++      render_target_cache_->last_update_framebuffer(), true);
+   uint32_t zpd_hybrid_index_after_render_pass =
+       active_segment_.hybrid ? active_query_index_ : UINT32_MAX;
+   if (zpd_hybrid && zpd_hybrid_index_after_render_pass !=
+@@ -3296,7 +3506,7 @@ bool VulkanCommandProcessor::IssueCopy() {
      uint64_t resolve_key =
          MakeReadbackResolveKey(written_address, written_length);
      ReadbackBuffer& rb = readback_buffers_[resolve_key];
@@ -403,7 +480,7 @@ index 65bb0e38a..a48ad71d1 100644
  
      uint32_t write_index = rb.current_index;
      uint32_t size = AlignReadbackBufferSize(readback_length);
-@@ -3570,6 +3778,8 @@ bool VulkanCommandProcessor::IssueCopy() {
+@@ -3570,6 +3780,8 @@ bool VulkanCommandProcessor::IssueCopy() {
            shared_memory_->buffer(), rb.buffers[write_index], 1, &copy_region);
      }
  
@@ -412,7 +489,7 @@ index 65bb0e38a..a48ad71d1 100644
      if (readback_mode != ReadbackResolveMode::kFast) {
        // Wait for GPU to finish (accurate but slow)
        if (!AwaitAllQueueOperationsCompletion()) {
-@@ -3588,6 +3798,13 @@ bool VulkanCommandProcessor::IssueCopy() {
+@@ -3588,6 +3800,13 @@ bool VulkanCommandProcessor::IssueCopy() {
              "resolve readback fallback");
          return true;
        }
@@ -426,7 +503,7 @@ index 65bb0e38a..a48ad71d1 100644
      }
  
      if (rb.buffers[read_index] != VK_NULL_HANDLE &&
-@@ -4387,9 +4604,16 @@ bool VulkanCommandProcessor::BeginSubmission(bool is_guest_command) {
+@@ -4387,9 +4606,16 @@ bool VulkanCommandProcessor::BeginSubmission(bool is_guest_command) {
    if (is_opening_frame) {
      frame_open_ = true;
  
@@ -446,7 +523,7 @@ index 65bb0e38a..a48ad71d1 100644
      }
  
      // Evict old readback buffers only when map gets too large to prevent
-@@ -4403,9 +4627,9 @@ bool VulkanCommandProcessor::BeginSubmission(bool is_guest_command) {
+@@ -4403,9 +4629,9 @@ bool VulkanCommandProcessor::BeginSubmission(bool is_guest_command) {
        for (auto it = readback_buffers_.begin();
             it != readback_buffers_.end();) {
          // Evict if not used recently
@@ -459,7 +536,7 @@ index 65bb0e38a..a48ad71d1 100644
            ui::vulkan::util::DestroyAndNullHandle(dfn.vkDestroyBuffer, device,
                                                   it->second.buffers[0]);
 diff --git a/src/xenia/gpu/vulkan/vulkan_command_processor.h b/src/xenia/gpu/vulkan/vulkan_command_processor.h
-index dc63a3ce1..3f3b8b1d0 100644
+index dc63a3ce1..d6b68f154 100644
 --- a/src/xenia/gpu/vulkan/vulkan_command_processor.h
 +++ b/src/xenia/gpu/vulkan/vulkan_command_processor.h
 @@ -153,6 +153,14 @@ class VulkanCommandProcessor final : public CommandProcessor {
@@ -477,7 +554,25 @@ index dc63a3ce1..3f3b8b1d0 100644
    void PollCompletedSubmission() override;
  
    ui::vulkan::VulkanDevice* GetVulkanDevice() const {
-@@ -531,6 +539,37 @@ class VulkanCommandProcessor final : public CommandProcessor {
+@@ -216,9 +224,16 @@ class VulkanCommandProcessor final : public CommandProcessor {
+ 
+   // If not started yet, begins a render pass from the render target cache.
+   // Submission must be open.
++  // chimera: guest_draw is true only for the pass a guest draw enters. The
++  // passes the render target cache enters for its own copies between render
++  // targets and for resolve clears leave a waiting query segment waiting:
++  // the Xbox 360 never drew those quads, and a segment opened there counted
++  // their samples, which depend on where the host render targets are (a
++  // renderer made again after a load has them elsewhere).
+   void SubmitBarriersAndEnterRenderTargetCacheRenderPass(
+       VkRenderPass render_pass,
+-      const VulkanRenderTargetCache::Framebuffer* framebuffer);
++      const VulkanRenderTargetCache::Framebuffer* framebuffer,
++      bool guest_draw = false);
+   // Must be called before doing anything outside the render pass scope,
+   // including adding pipeline barriers that are not a part of the render pass
+   // scope. Submission must be open.
+@@ -531,6 +546,37 @@ class VulkanCommandProcessor final : public CommandProcessor {
  
    bool device_lost_ = false;
  
@@ -515,7 +610,7 @@ index dc63a3ce1..3f3b8b1d0 100644
    bool cache_clear_requested_ = false;
  
    // Host shader types that guest shaders can be translated into - they can
-@@ -858,6 +897,9 @@ class VulkanCommandProcessor final : public CommandProcessor {
+@@ -858,6 +904,9 @@ class VulkanCommandProcessor final : public CommandProcessor {
      uint32_t sizes[2] = {0, 0};
      uint32_t current_index = 0;
      uint64_t last_used_frame = 0;
