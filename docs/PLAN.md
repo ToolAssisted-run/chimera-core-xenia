@@ -1572,3 +1572,23 @@ that draw, so nothing of it is left on the device for a load to lose. The
 two games of the list that want it (Splinter Cell: Conviction and
 Blacklist) were not tried; Mirror's Edge ends 300 frames with the same
 memory with it on as off.
+
+## A title update's name has a dot in it (2026-10-17, chimera #299)
+
+A title update picked for the Content slot (`TU_1D4I1UH_000000K000000.0000000000085`,
+for Rambo: The Video Game) got "is not one of the formats this slot
+expects" in Chimera's New Project window. The slot named one format, "no
+extension", and Chimera reads everything after the last dot as an
+extension. It was a warning only, and the core takes title updates (kind
+000B0000) as it takes add-on content, served in place from the project's
+file, where Xenia looks for one when the game starts (`FindTitleUpdate`).
+But it read as a refusal.
+
+The Content slot now names no formats, so the file picker offers every
+file and no name is questioned; the slot's help says what the names look
+like. Whether a file is a package, and of which kind, was always the
+core's to say when the project is made, by the package's header, and it
+says it by name. Checked with Chimera's package contract tests on the
+published package with the new declaration. Not tried: a real title update
+applied to its game.
+

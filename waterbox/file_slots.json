@@ -17,10 +17,8 @@
       "title": "Content",
       "min": 0,
       "max": 64,
-      "formats": [
-        ""
-      ],
-      "help": "Packages to put in the console's storage before the game starts, as standalone Xenia's File > Install Content does: add-on content (DLC), title updates and saved games. Each is one file with no extension and a long name of letters and digits, as it sits in the console's storage under Content/<profile>/<title>/<kind>. Add-on content and title updates are used as they are; a saved game is unpacked into the storage and is the machine's from then on. The project and the movie record exactly which files were used, as they do for the game."
+      "formats": [],
+      "help": "Packages to put in the console's storage before the game starts, as standalone Xenia's File > Install Content does: add-on content (DLC), title updates and saved games. Each is one file as it sits in the console's storage under Content/<profile>/<title>/<kind>: add-on content and saved games have a long name of letters and digits and no extension, and a title update's name starts with TU_ and has a dot in it. Add-on content and title updates are used as they are; a saved game is unpacked into the storage and is the machine's from then on. The project and the movie record exactly which files were used, as they do for the game."
     },
     {
       "id": "savedata",
