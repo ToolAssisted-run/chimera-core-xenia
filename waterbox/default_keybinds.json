@@ -5,10 +5,10 @@
   ],
   "AllTrollers": {
     "Xbox 360 Controllers": {
-      "P1 Up": "Up, J1 POV1U, X1 DpadUp",
-      "P1 Down": "Down, J1 POV1D, X1 DpadDown",
-      "P1 Left": "Left, J1 POV1L, X1 DpadLeft",
-      "P1 Right": "Right, J1 POV1R, X1 DpadRight",
+      "P1 Up": "Up, J1 POV0U, X1 DpadUp",
+      "P1 Down": "Down, J1 POV0D, X1 DpadDown",
+      "P1 Left": "Left, J1 POV0L, X1 DpadLeft",
+      "P1 Right": "Right, J1 POV0R, X1 DpadRight",
       "P1 Start": "Enter, J1 B10, X1 Start",
       "P1 Back": "Backspace, J1 B9, X1 Back",
       "P1 Left Stick": "J1 B11, X1 LeftThumb",
