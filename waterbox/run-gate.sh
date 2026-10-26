@@ -18,6 +18,28 @@ root="$(cd "$here/.." && pwd)"
 run="$root/build/vsched/bin/Linux/run-frames"
 wbx="$root/build/wbx"
 work="$(mktemp -d)"
+# A game runs only in a project (Chimera, 2026-10-26): crun_game <package>
+# <game> <movie> [chimera-run's options] makes one of the game and the movie,
+# with any --settings and --firmware given, and runs it with the rest.
+crun_quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+crun_game() {
+	cg_pkg="$1" cg_game="$2" cg_movie="$3" cg_made=""
+	shift 3
+	cg_n=$#
+	while [ "$cg_n" -gt 0 ]; do
+		case "$1" in
+			--settings) cg_made="$cg_made --settings $(crun_quote "$2")"; shift 2; cg_n=$((cg_n - 2)); continue ;;
+			--settings=*) cg_made="$cg_made --settings $(crun_quote "${1#--settings=}")"; shift; cg_n=$((cg_n - 1)); continue ;;
+			--firmware) cg_made="$cg_made --firmware $(crun_quote "$2")"; set -- "$@" "$1" "$2"; shift 2; cg_n=$((cg_n - 2)); continue ;;
+			--firmware=*) cg_made="$cg_made --firmware $(crun_quote "${1#--firmware=}")"; set -- "$@" "$1"; shift; cg_n=$((cg_n - 1)); continue ;;
+		esac
+		set -- "$@" "$1"; shift; cg_n=$((cg_n - 1))
+	done
+	cg_dir="$(mktemp -d "$work/project.XXXXXX")"
+	eval "env -u DISPLAY \"\$engine\" --new-project \"\$cg_dir/game.chimeraProject\" \"\$cg_pkg\" \"\$cg_game\" \"\$cg_movie\" $cg_made" \
+		> "$cg_dir/make.log" 2>&1 || { echo "chimera-run: no project made: $(tail -1 "$cg_dir/make.log")" >&2; return 2; }
+	env -u DISPLAY "$engine" --project "$cg_dir/game.chimeraProject" "$cg_pkg" --files "$(dirname "$cg_game")" "$@"
+}
 trap 'rm -rf "$work"' EXIT
 ok=0; failed=0; skipped=0
 report() { # <leg> <PASS|FAIL|SKIP> <what>
@@ -318,8 +340,8 @@ else
 	shot=80
 	fast='{"cpu_speed":"4000"}'
 	: > "$work/empty.movie"
-	env -u DISPLAY "$engine" "$package" "$game" "$work/empty.movie" --frames "$fe_frames" --record "$work/fe.movie" --gpu --settings "$fast" > "$work/fe-record.out" 2>&1
-	env -u DISPLAY "$engine" "$package" "$game" "$work/fe.movie" --gpu --settings "$fast" --screenshot "$shot=$work/fe.tga" > "$work/fe-play.out" 2>&1
+	crun_game "$package" "$game" "$work/empty.movie" --frames "$fe_frames" --record "$work/fe.movie" --gpu --settings "$fast" > "$work/fe-record.out" 2>&1
+	crun_game "$package" "$game" "$work/fe.movie" --gpu --settings "$fast" --screenshot "$shot=$work/fe.tga" > "$work/fe-play.out" 2>&1
 	played=$?
 	if grep -q "no Vulkan on this machine" "$work/fe-play.out"; then
 		report "frontend:picture" SKIP "no Vulkan on this machine"
@@ -333,7 +355,7 @@ else
 		else
 			report "frontend:picture" FAIL "chimera-run exit $played; pictures: $verdict; $(tail -1 "$work/fe-play.out")"
 		fi
-		env -u DISPLAY "$engine" "$package" "$game" "$work/fe.movie" --gpu --settings "$fast" --rerecord --screenshot "$shot=$work/fe-states.tga" > "$work/fe-states.out" 2>&1
+		crun_game "$package" "$game" "$work/fe.movie" --gpu --settings "$fast" --rerecord --screenshot "$shot=$work/fe-states.tga" > "$work/fe-states.out" 2>&1
 		stated=$?
 		verdict="$(python3 "$same" "$work/fe-states.tga" "$work/fe.tga" 2>&1)"; same_rc=$?
 		if [ "$stated" = 0 ] && grep -q "^frames=$fe_frames" "$work/fe-states.out" && [ "$same_rc" = 0 ]; then
@@ -342,9 +364,9 @@ else
 			report "frontend:states" FAIL "chimera-run --rerecord exit $stated; pictures: $verdict; $(tail -1 "$work/fe-states.out")"
 		fi
 	fi
-	env -u DISPLAY "$engine" "$package" "$game" "$work/fe.movie" --settings "$fast" > "$work/fe-nocard.out" 2>&1
+	crun_game "$package" "$game" "$work/fe.movie" --settings "$fast" > "$work/fe-nocard.out" 2>&1
 	refused=$?
-	env -u DISPLAY "$engine" "$package" "$game" "$work/fe.movie" --settings '{"renderer":"null","cpu_speed":"4000"}' --export-savedata "$work/fe-saved" > "$work/fe-null.out" 2>&1
+	crun_game "$package" "$game" "$work/fe.movie" --settings '{"renderer":"null","cpu_speed":"4000"}' --export-savedata "$work/fe-saved" > "$work/fe-null.out" 2>&1
 	ran=$?
 	if [ "$refused" != 0 ] && grep -q "the Vulkan renderer needs a device" "$work/fe-nocard.out" && [ "$ran" = 0 ] && grep -q "^frames=$fe_frames" "$work/fe-null.out"; then
 		report "frontend:no-card" PASS "with no card handed over the package refuses to start and says why (exit $refused); with the renderer that draws nothing it runs its $fe_frames frames"
@@ -365,7 +387,7 @@ else
 	# recorded movie is "||" and then one group ending in "|" for each
 	# controller, so the bars are counted: 3 with one controller, 4 with two.
 	bars() { # <how many controllers>: the bars in a recorded row
-		env -u DISPLAY "$engine" "$package" "$game" "$work/empty.movie" --frames 3 --record "$work/pads$1.movie" \
+		crun_game "$package" "$game" "$work/empty.movie" --frames 3 --record "$work/pads$1.movie" \
 			--settings "{\"renderer\":\"null\",\"cpu_speed\":\"4000\",\"pads\":\"$1\"}" > "$work/pads$1.out" 2>&1
 		head -1 "$work/pads$1.movie" 2> /dev/null | tr -cd '|' | wc -c
 	}
@@ -561,11 +583,11 @@ elif [ ! -s "$container" ]; then
 	report "frontend:container" SKIP "no test container (container:launch did not make one)"
 else
 	: > "$work/empty.movie"
-	env -u DISPLAY "$engine" "$package" "$container" "$work/empty.movie" --frames 60 --record "$work/fc.movie" --settings '{"renderer":"null","cpu_speed":"4000"}' > "$work/fc.out" 2>&1
+	crun_game "$package" "$container" "$work/empty.movie" --frames 60 --record "$work/fc.movie" --settings '{"renderer":"null","cpu_speed":"4000"}' > "$work/fc.out" 2>&1
 	fc=$?
-	env -u DISPLAY "$engine" "$package" "$container" "$work/empty.movie" --frames 60 --record "$work/fc-trial.movie" --settings '{"renderer":"null","cpu_speed":"4000","arcade_license":"trial"}' > "$work/fc-trial.out" 2>&1
+	crun_game "$package" "$container" "$work/empty.movie" --frames 60 --record "$work/fc-trial.movie" --settings '{"renderer":"null","cpu_speed":"4000","arcade_license":"trial"}' > "$work/fc-trial.out" 2>&1
 	fct=$?
-	env -u DISPLAY "$engine" "$package" "$container" "$work/empty.movie" --frames 60 --record "$work/fc-bad.movie" --settings '{"renderer":"null","cpu_speed":"4000","arcade_license":"neither"}' > "$work/fc-bad.out" 2>&1
+	crun_game "$package" "$container" "$work/empty.movie" --frames 60 --record "$work/fc-bad.movie" --settings '{"renderer":"null","cpu_speed":"4000","arcade_license":"neither"}' > "$work/fc-bad.out" 2>&1
 	fcb=$?
 	if [ "$fc" = 0 ] && grep -q "^frames=60" "$work/fc.out" && [ "$fct" = 0 ] && grep -q "^frames=60" "$work/fc-trial.out" &&
 		[ "$fcb" != 0 ] && grep -q "no such Arcade Games setting" "$work/fc-bad.out"; then
@@ -602,7 +624,8 @@ fi
 
 # Per-game settings (chimera issue 289). Before a project exists, the New
 # Project window asks the core what it suggests for the game (chimera-run
-# --suggest calls the same export): the game is found by its title id, read
+# --project ... --suggest calls the same export, of a project made of the
+# game, as a game runs only in a project): the game is found by its title id, read
 # from the disc's default.xex or from a container's header, in Xenia
 # Manager's list of optimized settings, which the core carries. Mirror's
 # Edge (45410850) is in the list. The container made above holds the same
@@ -612,10 +635,13 @@ if [ -z "$chimera_root" ] || [ ! -x "$engine" ] || [ ! -f "$package" ]; then
 elif [ ! -f "$game" ]; then
 	report "frontend:suggest" SKIP "$why_native"
 else
-	env -u DISPLAY "$engine" "$package" "$game" --suggest > "$work/sg-disc.out" 2>&1
+	sgdir="$(mktemp -d "$work/project.XXXXXX")"
+	"$engine" --new-project "$sgdir/disc.chimeraProject" "$package" "$game" > "$sgdir/disc.make.log" 2>&1 \
+		&& "$engine" --project "$sgdir/disc.chimeraProject" "$package" --files "$(dirname "$game")" --suggest > "$work/sg-disc.out" 2>&1
 	sgd=$?
 	sgc=1
-	[ -s "$container" ] && { env -u DISPLAY "$engine" "$package" "$container" --suggest > "$work/sg-cont.out" 2>&1; sgc=$?; }
+	[ -s "$container" ] && { "$engine" --new-project "$sgdir/container.chimeraProject" "$package" "$container" > "$sgdir/container.make.log" 2>&1 \
+		&& "$engine" --project "$sgdir/container.chimeraProject" "$package" --files "$(dirname "$container")" --suggest > "$work/sg-cont.out" 2>&1; sgc=$?; }
 	if [ "$sgd" = 0 ] && grep -q '"title_id":"45410850"' "$work/sg-disc.out" && grep -q "optimized settings for Mirror's Edge" "$work/sg-disc.out" &&
 		[ "$sgc" = 0 ] && grep -q '"title_id":"45410850"' "$work/sg-cont.out"; then
 		report "frontend:suggest" PASS "the disc and the container made from it are both found as 45410850 in the list: $(sed -n 's/.*"note":"\([^"]*\)".*/\1/p' "$work/sg-disc.out" | cut -c1-100)..."
@@ -650,7 +676,7 @@ elif [ ! -s "$container" ]; then
 else
 	: > "$work/empty.movie"
 	xs() { # <name> <settings>
-		env -u DISPLAY "$engine" "$package" "$container" "$work/empty.movie" --frames 30 --record "$work/$1.movie" --settings "$2" > "$work/$1.out" 2>&1
+		crun_game "$package" "$container" "$work/empty.movie" --frames 30 --record "$work/$1.movie" --settings "$2" > "$work/$1.out" 2>&1
 	}
 	xs xs-w '{"renderer":"null","cpu_speed":"4000","scribble_heap":"often"}'; xw=$?
 	xs xs-s '{"renderer":"null","cpu_speed":"4000","mount_scratch":true}'; xsc=$?
@@ -780,7 +806,7 @@ elif [ ! -x "$wbx/run-wbx" ] || [ ! -f "$wbx/core.wbx" ]; then
 	report "frontend:full-hd" SKIP "no build/wbx/core.wbx: run waterbox/build-guest.sh"
 else
 	: > "$work/empty.movie"
-	env -u DISPLAY "$engine" "$package" "$hd_game" "$work/empty.movie" --frames 100 --record "$work/hd.movie" \
+	crun_game "$package" "$hd_game" "$work/empty.movie" --frames 100 --record "$work/hd.movie" \
 		--gpu --settings '{"cpu_speed":"4000"}' --screenshot "80=$work/hd.tga" > "$work/hd.out" 2>&1
 	hd=$?
 	# the engine counts frames from 0, the runner from 1
