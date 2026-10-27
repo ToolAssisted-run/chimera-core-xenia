@@ -22,12 +22,13 @@ on a 20-thread machine.
 ```sh
 sudo apt-get install -y --no-install-recommends meson ninja-build \
   build-essential cmake pkg-config python3 curl flex bison \
-  gcc-13 gcc-14 g++-14 mono-complete
+  gcc-13 gcc-14 g++-14
 ```
 
 Chimera's own build needs a few more (its README lists them):
-`libgl1-mesa-dev libegl-dev libx11-dev libxext-dev libasound2-dev`. This core
-links none of them.
+`libgl1-mesa-dev libegl-dev libx11-dev libxext-dev libasound2-dev`, and Qt 6.12
+for its window. Chimera's `tools/ci-chimera.sh` installs Qt (from Qt's own
+archives, with aqt) and builds Chimera. This core links none of them.
 
 For the tests that draw, a Vulkan driver. Mesa's software one will do:
 `sudo apt-get install -y mesa-vulkan-drivers libvulkan1`.
@@ -126,9 +127,7 @@ Chimera's own checks of an installed package:
 
 ```sh
 cd <chimera>
-CHIMERA_CORES_DIR=$PWD/build/Cores dotnet test \
-  source/gui/Chimera.Tests.Client.Common/Chimera.Tests.Client.Common.csproj -c Release \
-  --filter "FullyQualifiedName~InstalledCorePackagesTests|FullyQualifiedName~MnemonicUniquenessTests"
+CHIMERA_CORES_DIR=$PWD/build/Cores build/meson-linux/source/ui/test-packages
 ```
 
 ## Running a game by hand

@@ -1055,7 +1055,7 @@ What happened when it was published, 2026-10-11:
   were skipped for want of a game, Chimera's package checks passed 17 of
   17, and the release "Development build 494a351c" was published.
 - Chimera's window was run with the package on Windows on the GeForce GTX
-  1060, driven by a script (`Chimera.exe --headless` with a Lua script):
+  1060, driven by a script (Chimera's window run headless with a Lua script):
   it started the game through the bridge, ran 420 frames, took screenshots,
   saved the project, and opened the saved project again.
 - That run showed a defect: the input log had columns for all four
