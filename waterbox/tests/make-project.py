@@ -56,7 +56,7 @@ def main():
         "settings": settings,
         "firmware": [],
         "coreCache": [],
-        "input": "[Input]\nLogKey:#\n[/Input]\n",
+        "inputs": {"columns": [[]], "entries": []},
         "markers": [],
         "branches": [],
         "headers": {
