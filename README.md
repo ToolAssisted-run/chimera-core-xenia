@@ -42,7 +42,8 @@ Besides the game, a project can hold **Content**: add-on content (DLC),
 title updates and saved games, each one package file as a console keeps it,
 put in the console's storage before the game starts as standalone Xenia's
 Install Content does. And **Save data**: the zip Emulator > Export Save
-Data... writes, put back the same way.
+Data... writes, put back the same way; a profile in it is the one the
+console signs in.
 
 ## Settings
 

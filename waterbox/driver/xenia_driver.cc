@@ -467,6 +467,8 @@ bool apply_xenia_setting(const std::string& name, const std::string& value, std:
 
 namespace {
 // The console switched on, with nothing in it yet.
+bool load_savedata(const std::string& host, std::string& error);
+
 bool switch_on(const Options& options, std::string& error) {
   if (g_machine) {
     error = "the machine is already on";
@@ -528,6 +530,14 @@ bool switch_on(const Options& options, std::string& error) {
   for (const char* directory : {"storage", "content", "cache"}) {
     chimera::memfs::mkdirs((work / directory).string());
   }
+  // The Save data slot's files go in before the emulator looks at its
+  // storage: Xenia reads the profiles there when it starts, and a profile
+  // brought must be the one it signs in, with the games' files it keeps
+  // (chimera#386: a game's unlocks kept in the profile were lost when the
+  // profile was made first and the brought files written over it after).
+  if (!options.savedata.empty() && !load_savedata(options.savedata, error)) {
+    return false;
+  }
   m.emulator = std::make_unique<xe::Emulator>("", work / "storage", work / "content", work / "cache");
   const bool vulkan = options.renderer == "vulkan";
   m.vulkan = vulkan;
@@ -569,9 +579,13 @@ bool switch_on(const Options& options, std::string& error) {
   }
   // One profile, always the same one, always signed in on the first pad: a
   // game that will not save - or will not start - without somebody signed in
-  // has somebody. (Upstream's own fixed identity for a default profile.)
+  // has somebody. (Upstream's own fixed identity for a default profile.) The
+  // Save data slot may have brought it: then it is that one that signs in.
   if (auto* profiles = m.emulator->kernel_state()->xam_state()->profile_manager()) {
-    if (!profiles->CreateProfile("Player", true, true)) {
+    constexpr uint64_t kPlayer = 0xB13EBABEBABEBABE;  // CreateProfile's default identity
+    if (profiles->GetAccount(kPlayer)) {
+      profiles->Login(kPlayer);
+    } else if (!profiles->CreateProfile("Player", true, true)) {
       error = "the console's profile could not be made";
       return false;
     }
@@ -803,10 +817,8 @@ bool boot(const std::string& program, const Options& options, std::string& error
   }
   Machine& m = *g_machine;
   // What the project brings besides the game, before the game starts: the
-  // saved storage first, then the packages on top of it.
-  if (!options.savedata.empty() && !load_savedata(options.savedata, error)) {
-    return false;
-  }
+  // saved storage was put in when the machine was switched on; the packages
+  // go on top of it.
   for (const std::string& package : options.content) {
     if (!install_package(m, package, error)) {
       return false;

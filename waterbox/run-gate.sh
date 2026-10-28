@@ -787,6 +787,38 @@ SAVECMP
 		report "frontend:savedata-in" FAIL "exit $sd, $back of 2 files back; a wrong zip: exit $bad [$(tail -1 "$work/sd-bad.out")]; $(tail -1 "$work/sd.out")"
 	fi
 fi
+# A profile brought by the Save data slot is the one the console signs in,
+# with the games' files it keeps (chimera#386: it used to be made fresh
+# first and the brought files written over it after, so a game's unlocks
+# kept in the profile were lost). Xenia's own log says it found the profile
+# when it started.
+if [ -z "$chimera_root" ] || [ ! -x "$engine" ] || [ ! -f "$package" ]; then
+	report "frontend:savedata-profile" SKIP "set CHIMERA_ROOT to a Chimera checkout with build/meson-linux/chimera-run and the package"
+elif [ ! -f "$game" ] || [ ! -s "$work/fe-saved/content/B13EBABEBABEBABE/FFFE07D1/00010000/B13EBABEBABEBABE/Account" ]; then
+	report "frontend:savedata-profile" SKIP "no exported profile (frontend:savedata did not run)"
+else
+	mkdir -p "$work/sp-in"
+	python3 - "$work/fe-saved" "$work/sp-in/profile.zip" <<'PROFILEZIP'
+import os, sys, zipfile
+with zipfile.ZipFile(sys.argv[2], "w", zipfile.ZIP_DEFLATED) as z:
+    for root, _, files in os.walk(sys.argv[1]):
+        for f in files:
+            p = os.path.join(root, f)
+            z.write(p, os.path.relpath(p, sys.argv[1]))
+PROFILEZIP
+	python3 "$here/tests/make-project.py" "$package" "$work/sp.chimeraProject" "$game" --set=renderer=null --set=cpu_speed=4000 \
+		--file=savedata="$work/sp-in/profile.zip" > "$work/sp-make.out" 2>&1
+	# Xenia's log on, for this run only (the core reads "log"; it is no setting of the package's)
+	python3 -c 'import json, sys; d = json.load(open(sys.argv[1])); d["settings"]["log"] = "1"; json.dump(d, open(sys.argv[1], "w"))' "$work/sp.chimeraProject"
+	env -u DISPLAY "$engine" --project "$work/sp.chimeraProject" "$package" --files "$(dirname "$game")" --files "$work/sp-in" \
+		--frames 30 --record "$work/sp.movie" --core-log "$work/sp-core.log" > "$work/sp.out" 2>&1
+	sp=$?
+	if [ "$sp" = 0 ] && grep -q "Loading Account: B13EBABEBABEBABE" "$work/sp-core.log"; then
+		report "frontend:savedata-profile" PASS "a profile in the Save data slot is the one the console finds when it starts and signs in"
+	else
+		report "frontend:savedata-profile" FAIL "exit $sp; the console did not find the brought profile at its start [$(grep -m1 -i 'account' "$work/sp-core.log")]"
+	fi
+fi
 
 # A game that draws its picture at 1920x1080. The console tells every game
 # the television is 1280x720, and most draw at that size, but some draw at
