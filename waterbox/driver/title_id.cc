@@ -93,7 +93,7 @@ bool find_default_xex(FILE* f, uint64_t game, uint64_t size, uint64_t& at, uint3
 std::string title_id_of(const std::string& path, std::string& why) {
   FILE* f = std::fopen(path.c_str(), "rb");
   if (!f) {
-    why = "the game file could not be opened";
+    why = "suggest.reason.not_opened";
     return {};
   }
   std::string id;
@@ -116,7 +116,7 @@ std::string title_id_of(const std::string& path, std::string& why) {
       }
     }
     if (!found) {
-      why = "the game file is neither an Xbox 360 disc image with a default.xex nor an Arcade game";
+      why = "suggest.reason.not_a_game";
     } else {
       // the headers are at the start of the program, and are small
       std::vector<uint8_t> xex(length < 0x10000 ? length : 0x10000);
@@ -124,7 +124,7 @@ std::string title_id_of(const std::string& path, std::string& why) {
       if (read_at(f, at, xex.data(), xex.size()) && title_of_xex(xex, title)) {
         id = hex8(title);
       } else {
-        why = "the disc's default.xex does not say which game it is";
+        why = "suggest.reason.no_title";
       }
     }
   }

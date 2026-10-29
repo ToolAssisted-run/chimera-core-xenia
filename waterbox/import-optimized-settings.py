@@ -55,39 +55,43 @@ CARD = {"readback_resolve", "occlusion_query", "occlusion_query_full_counters", 
 CARD_SAFE = {("occlusion_query", "fake"), ("readback_resolve", "none"), ("occlusion_query_full_counters", False),
              ("readback_memexport", False)}
 # Of those, the ones the core offers as settings: all of them.
-OFFERED_CARD = {"Readback Resolve", "Occlusion Query", "Occlusion Query Full Counters", "Readback Memexport"}
+OFFERED_CARD = {"setting.readback_resolve", "setting.occlusion_query", "setting.occlusion_query_full_counters",
+                "setting.readback_memexport"}
 # "suggest": suggested like any other; "note": named in the note, not set -
 # the owner's choice: offered as settings, never set by the suggestion
 # (user-decided, 2026-10-16).
 CARD_POLICY = "note"
 
-# Settings the core does not have, and why, in the note's words.
+# Settings the core does not have, and why: a key of languages/en.json each
+# (the note is keys, chimera docs/translations.md).
 LEFT_OUT = {
-    "vsync": "a frame here is always one of the console's sixty a second",
-    "framerate_limit": "a frame here is always one of the console's sixty a second",
-    "render_target_path_d3d12": "it is for Direct3D 12, and this core draws with Vulkan",
-    "d3d12_submit_on_primary_buffer_end": "it is for Direct3D 12, and this core draws with Vulkan",
-    "use_fuzzy_alpha_epsilon": "it is for Direct3D 12, and this core draws with Vulkan",
-    "gpu": "this core draws with Vulkan, the Renderer setting",
-    "apu": "the sound goes to Chimera",
-    "controller_hotkeys": "Chimera has its own hotkeys",
-    "disassemble_functions": "it writes a log for developers",
-    "mount_cache": "the console's storage is the project's",
-    "draw_resolution_scale_threshold": "this core draws at the console's own resolution",
-    "time_scalar": "the console's clock here runs at its own speed",
+    "vsync": "suggest.reason.sixty_frames",
+    "framerate_limit": "suggest.reason.sixty_frames",
+    "render_target_path_d3d12": "suggest.reason.direct3d12",
+    "d3d12_submit_on_primary_buffer_end": "suggest.reason.direct3d12",
+    "use_fuzzy_alpha_epsilon": "suggest.reason.direct3d12",
+    "gpu": "suggest.reason.vulkan",
+    "apu": "suggest.reason.sound",
+    "controller_hotkeys": "suggest.reason.hotkeys",
+    "disassemble_functions": "suggest.reason.developer_log",
+    "mount_cache": "suggest.reason.storage",
+    "draw_resolution_scale_threshold": "suggest.reason.resolution",
+    "time_scalar": "suggest.reason.clock",
     "license_mask": None,  # the Arcade Games setting, below
-    "occlusion_query_querybatch_range": "this core's Xenia does not have it",
-    "ac6_ground_fix": "this core's Xenia does not have it",
+    "occlusion_query_querybatch_range": "suggest.reason.not_in_xenia",
+    "ac6_ground_fix": "suggest.reason.not_in_xenia",
 }
+# the note: a text each, a line each, each key's arguments after a 0x1F
+ARG, LINE = "\x1f", "\x1d"
 
 
-# the names the settings page shows, from the package's own declarations;
-# the settings it does not declare by Xenia's own name
-DISPLAY = {"readback_resolve": "Readback Resolve", "occlusion_query": "Occlusion Query",
-           "occlusion_query_full_counters": "Occlusion Query Full Counters",
-           "readback_memexport": "Readback Memexport"}
+def item(key, *args):
+    return ARG.join([key] + [str(a) for a in args])
+
+
+# the names the settings page shows (keys), from the package's own declarations
 with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "waterbox.config"), encoding="utf-8") as f:
-    DISPLAY.update({s["name"]: s["display"] for s in json.load(f)["settings"]})
+    DISPLAY = {s["name"]: s["display"] for s in json.load(f)["settings"]}
 
 
 def display(name):
@@ -112,7 +116,9 @@ def comments(path):
 
 
 def c_string(s):
-    return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    # 0x1F and 0x1D each written as an octal escape, which takes at most
+    # three digits and so never runs into the text after it
+    return '"' + s.replace("\\", "\\\\").replace('"', '\\"').replace("\x1f", "\\037").replace("\x1d", "\\035") + '"'
 
 
 def main():
@@ -140,7 +146,7 @@ def main():
                 kind = SETTINGS.get((section, k))
                 if k == "license_mask":
                     values["arcade_license"] = "full" if v else "trial"
-                    said.append(("Arcade Games", "full" if v else "trial", fix))
+                    said.append((display("arcade_license"), "full" if v else "trial", fix))
                 elif kind:
                     text = value_text(v)
                     if k in CARD and (k, v) not in CARD_SAFE and CARD_POLICY != "suggest":
@@ -149,29 +155,27 @@ def main():
                         values[k] = v if kind != "string" else str(v)
                         said.append((display(k), text, fix))
                 else:
-                    out.append((k, value_text(v), LEFT_OUT.get(k, "this core does not have it")))
+                    out.append((k, value_text(v), LEFT_OUT.get(k, "suggest.reason.not_in_core")))
 
         for section, kv in table.items():
             walk(section, kv)
         title = titles.get(tid, tid)
-        parts = []
-        for k, v, fix in said:
-            parts.append(f"{k} {v}" + (f" ({fix[0].lower() + fix[1:]})" if fix else ""))
-        note = f"Xenia Manager's optimized settings for {title}."
-        if parts:
-            note += " Set: " + "; ".join(parts) + "."
+
+        def setting(k, v, fix):
+            # the list's own reason, as it wrote it, is not ours to translate
+            return item("suggest.item_why", k, v, fix[0].lower() + fix[1:]) if fix else item("suggest.item", k, v)
+        lines = [item("suggest.title", title)]
+        if said:
+            lines += ["suggest.set"] + [setting(k, v, fix) for k, v, fix in said]
         offered = [x for x in card if x[0] in OFFERED_CARD]
         held = [x for x in card if x[0] not in OFFERED_CARD]
         if offered:
-            note += " Not set, because the console would then hold what your graphics card draws, and a movie " \
-                    "might play back differently on another card (set it below yourself if the game needs it): " + "; ".join(
-                        f"{k} {v}" + (f" ({fix[0].lower() + fix[1:]})" if fix else "") for k, v, fix in offered) + "."
+            lines += ["suggest.card"] + [setting(k, v, fix) for k, v, fix in offered]
         if held:
-            note += " Not offered by this core yet: " + "; ".join(
-                f"{k} {v}" + (f" ({fix[0].lower() + fix[1:]})" if fix else "") for k, v, fix in held) + "."
+            lines += ["suggest.not_offered"] + [setting(k, v, fix) for k, v, fix in held]
         if out:
-            note += " Not used here: " + "; ".join(f"{k} = {v}, as {r}" for k, v, r in out) + "."
-        rows.append((tid, title, json.dumps(values, separators=(",", ":")), note))
+            lines += ["suggest.not_used"] + [item("suggest.left_out", k, v, r) for k, v, r in out]
+        rows.append((tid, title, json.dumps(values, separators=(",", ":")), LINE.join(lines)))
 
     print("// GENERATED by waterbox/import-optimized-settings.py; do not edit.")
     print(f"// From github.com/xenia-manager/optimized-settings at {commit},")

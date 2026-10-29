@@ -15,6 +15,13 @@
 
 #include "title_id.h"
 
+/* A text a person reads is a key of languages/en.json, each of its
+ * arguments after a TEXT_ARG, and a note of several texts puts a TEXT_LINE
+ * before each (chimera docs/translations.md). Each is a string of its own so
+ * the byte after it is never read as more of its hex. */
+#define TEXT_ARG "\x1f"
+#define TEXT_LINE "\x1d"
+
 namespace chimera_xenia {
 namespace {
 
@@ -36,7 +43,10 @@ std::string json_quoted(const std::string& s) {
       out += '\\';
       out += c;
     } else if (static_cast<unsigned char>(c) < 0x20) {
-      out += ' ';
+      // a text's separators (0x1F, 0x1D) too: they are what the engine reads
+      char code[8];
+      std::snprintf(code, sizeof code, "\\u%04x", static_cast<unsigned>(static_cast<unsigned char>(c)));
+      out += code;
     } else {
       out += c;
     }
@@ -58,14 +68,11 @@ std::string suggest_settings(const std::string& game) {
   }
   std::string note;
   if (found) {
-    note = std::string(found->note) +
-           " The list is Xenia Manager's (github.com/xenia-manager/optimized-settings), "
-           "a port of A1eNaz's wiki of optimized settings.";
+    note = std::string(found->note) + TEXT_LINE "suggest.credit";
   } else if (id.empty()) {
-    note = "No settings are suggested: " + (game.empty() ? std::string("there is no game") : why) + ".";
+    note = std::string("suggest.none" TEXT_ARG) + (game.empty() ? std::string("suggest.no_game") : why);
   } else {
-    note = "Xenia Manager's list of optimized settings (github.com/xenia-manager/optimized-settings) has nothing "
-           "for this game (title id " + id + "), so every setting stays as it is.";
+    note = std::string("suggest.not_listed" TEXT_ARG) + id;
   }
   return "{\"title_id\":" + json_quoted(id) + ",\"values\":" + (found ? found->values : "{}") +
          ",\"note\":" + json_quoted(note) + "}";

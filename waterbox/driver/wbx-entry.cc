@@ -18,6 +18,11 @@
 #include "vk-bridge.h"
 #endif
 
+/* A text a person reads is a key of languages/en.json, each of its
+ * arguments after a TEXT_ARG (chimera docs/translations.md). TEXT_ARG is a
+ * string of its own so the byte after it is never read as more of its hex. */
+#define TEXT_ARG "\x1f"
+
 #define CORE_EXPORT extern "C" __attribute__((visibility("default"), used))
 #ifdef CHIMERA_GUEST
 // not in a savestate: scratch that is written and read within one call
@@ -287,7 +292,7 @@ CORE_EXPORT int Init(void) {
   const std::string slots = read_file("slots");
   const std::string name = game_file(slots);
   if (name.empty()) {
-    g_error = "no game: neither a \"game\" slot nor rom.name";
+    g_error = "error.no_file";
     return 0;
   }
   const std::string settings = read_file("settings");
@@ -300,14 +305,14 @@ CORE_EXPORT int Init(void) {
   } else if (renderer == "null" || renderer.empty()) {
     options.renderer = "null";
   } else {
-    g_error = "no such renderer: " + renderer;
+    g_error = std::string("error.bad_renderer" TEXT_ARG) + renderer;
     return 0;
   }
   const std::string pads = json_string(settings, "pads");
   if (!pads.empty()) {
     options.pads = std::atoi(pads.c_str());
     if (options.pads < 0 || options.pads > chimera_xenia::PORTS) {
-      g_error = "no such number of pads: " + pads;
+      g_error = std::string("error.bad_pads" TEXT_ARG) + pads;
       return 0;
     }
   }
@@ -320,7 +325,7 @@ CORE_EXPORT int Init(void) {
   if (!cpu_speed.empty()) {
     const long long mips = std::atoll(cpu_speed.c_str());
     if (mips != 500 && mips != 1000 && mips != 2000 && mips != 4000) {
-      g_error = "no such CPU speed: " + cpu_speed;
+      g_error = std::string("error.bad_cpu_speed" TEXT_ARG) + cpu_speed;
       return 0;
     }
     options.instruction_ps = 1000000 / mips;
@@ -329,7 +334,7 @@ CORE_EXPORT int Init(void) {
   // Arcade Games: "full" (and no word at all) is a game that was bought
   const std::string arcade = json_string(settings, "arcade_license");
   if (!arcade.empty() && arcade != "full" && arcade != "trial") {
-    g_error = "no such Arcade Games setting: " + arcade;
+    g_error = std::string("error.bad_arcade" TEXT_ARG) + arcade;
     return 0;
   }
   options.arcade_bought = arcade != "trial";
@@ -349,7 +354,7 @@ CORE_EXPORT int Init(void) {
       line += "\"";
     } else if (x.kind == 'b') {
       if (value != "true" && value != "false") {
-        g_error = std::string("the setting ") + x.name + " is true or false, not " + value;
+        g_error = std::string("error.not_bool" TEXT_ARG) + x.name + TEXT_ARG + value;
         return 0;
       }
       line = value;
@@ -357,7 +362,7 @@ CORE_EXPORT int Init(void) {
       char* end = nullptr;
       std::strtoll(value.c_str(), &end, 10);
       if (end == value.c_str() || *end) {
-        g_error = std::string("the setting ") + x.name + " is a whole number, not " + value;
+        g_error = std::string("error.not_int" TEXT_ARG) + x.name + TEXT_ARG + value;
         return 0;
       }
       line = value;
@@ -374,9 +379,7 @@ CORE_EXPORT int Init(void) {
     options.discs.push_back(mounted(discs[i]));
   }
   if (options.renderer == "vulkan" && !g_bridge) {
-    g_error = "the Vulkan renderer needs a device, and none was handed over. Either this machine has no Vulkan, or "
-              "this Chimera is older than this core: its Vulkan bridge has fewer commands than the core was built "
-              "with, and a newer Chimera is needed";
+    g_error = "error.no_vulkan";
     return 0;
   }
   return chimera_xenia::boot(name, options, g_error) ? 1 : 0;

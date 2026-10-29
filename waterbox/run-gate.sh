@@ -368,7 +368,7 @@ else
 	refused=$?
 	crun_game "$package" "$game" "$work/fe.movie" --settings '{"renderer":"null","cpu_speed":"4000"}' --export-savedata "$work/fe-saved" > "$work/fe-null.out" 2>&1
 	ran=$?
-	if [ "$refused" != 0 ] && grep -q "the Vulkan renderer needs a device" "$work/fe-nocard.out" && [ "$ran" = 0 ] && grep -q "^frames=$fe_frames" "$work/fe-null.out"; then
+	if [ "$refused" != 0 ] && grep -q "The Vulkan renderer needs a device" "$work/fe-nocard.out" && [ "$ran" = 0 ] && grep -q "^frames=$fe_frames" "$work/fe-null.out"; then
 		report "frontend:no-card" PASS "with no card handed over the package refuses to start and says why (exit $refused); with the renderer that draws nothing it runs its $fe_frames frames"
 	else
 		report "frontend:no-card" FAIL "no card: exit $refused [$(tail -1 "$work/fe-nocard.out")]; renderer null: exit $ran [$(tail -1 "$work/fe-null.out")]"
@@ -590,7 +590,7 @@ else
 	crun_game "$package" "$container" "$work/empty.movie" --frames 60 --record "$work/fc-bad.movie" --settings '{"renderer":"null","cpu_speed":"4000","arcade_license":"neither"}' > "$work/fc-bad.out" 2>&1
 	fcb=$?
 	if [ "$fc" = 0 ] && grep -q "^frames=60" "$work/fc.out" && [ "$fct" = 0 ] && grep -q "^frames=60" "$work/fc-trial.out" &&
-		[ "$fcb" != 0 ] && grep -q "no such Arcade Games setting" "$work/fc-bad.out"; then
+		[ "$fcb" != 0 ] && grep -q "is not an Arcade Games setting" "$work/fc-bad.out"; then
 		report "frontend:container" PASS "the package in chimera-run starts the container and runs its 60 frames, with Arcade Games set to full and to trial; another value is refused (exit $fcb)"
 	else
 		report "frontend:container" FAIL "full: exit $fc [$(tail -1 "$work/fc.out")]; trial: exit $fct [$(tail -1 "$work/fc-trial.out")]; a wrong value: exit $fcb [$(tail -1 "$work/fc-bad.out")]"
@@ -712,7 +712,7 @@ else
 	said="addon is in the console's storage: title $(sed -n 's/.*title \([0-9A-F]*\),.*/\1/p' "$work/addon.out"), kind 00000002"
 	if grep -q "$said" "$work/ad-native.out" && grep -q "$said" "$work/ad-sandbox.out" &&
 		grep -q "^end frame=10 " "$work/ad-native.out" && grep -q "^end frame=10 " "$work/ad-sandbox.out" &&
-		[ "$aw" != 0 ] && grep -q "which the Content slot does not take" "$work/ad-wrong.out"; then
+		[ "$aw" != 0 ] && grep -q "error.package_kind" "$work/ad-wrong.out"; then
 		report "content:install" PASS "add-on content made from the disc is put in the console's storage and listed where a game asks for it ($said), natively and in the sandbox; a package of another kind is refused"
 	else
 		report "content:install" FAIL "native [$(grep -o 'chimera: .*' "$work/ad-native.out" | tail -1)] sandbox [$(grep -o 'chimera: .*' "$work/ad-sandbox.out" | tail -1)] wrong kind: exit $aw [$(tail -1 "$work/ad-wrong.out")]"

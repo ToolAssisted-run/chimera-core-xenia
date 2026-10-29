@@ -66,7 +66,7 @@ inline bool apply_machine_settings(std::string& error) {
   const uint64_t have = xe::amd64::GetFeatureFlags();
   const uint64_t need = xe::amd64::kX64EmitAVX2 | xe::amd64::kX64EmitFMA;
   if ((have & need) != need) {
-    error = "this processor has no AVX2 or no FMA, and the core needs both";
+    error = "error.no_avx2";
     return false;
   }
   return true;

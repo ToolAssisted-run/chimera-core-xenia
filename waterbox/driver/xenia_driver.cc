@@ -49,6 +49,11 @@
 #include "xenia/ui/virtual_key.h"
 #include "xenia/vfs/devices/host_path_device.h"
 
+/* A text a person reads is a key of languages/en.json, each of its
+ * arguments after a TEXT_ARG (chimera docs/translations.md). TEXT_ARG is a
+ * string of its own so the byte after it is never read as more of its hex. */
+#define TEXT_ARG "\x1f"
+
 DECLARE_path(log_file);
 DECLARE_bool(log_to_stdout);
 // Upstream defines it in its desktop app, which this core does not build.
@@ -443,21 +448,21 @@ int16_t clamp16(int32_t v) { return static_cast<int16_t>(v > 32767 ? 32767 : v <
 bool apply_xenia_setting(const std::string& name, const std::string& value, std::string& error) {
   const auto found = cvar::ConfigVars ? cvar::ConfigVars->find(name) : std::map<std::string, cvar::IConfigVar*>::iterator();
   if (!cvar::ConfigVars || found == cvar::ConfigVars->end()) {
-    error = "Xenia has no setting called " + name;
+    error = std::string("error.no_xenia_setting" TEXT_ARG) + name;
     return false;
   }
   toml::table line;
   try {
     line = toml::parse(name + " = " + value);
   } catch (const toml::parse_error&) {
-    error = "the value of Xenia's setting " + name + " cannot be read: " + value;
+    error = std::string("error.xenia_setting_unreadable" TEXT_ARG) + name + TEXT_ARG + value;
     return false;
   }
   // a value of the wrong kind is passed over, and only noted in a list
   const size_t mismatches = cvar::config_type_mismatch_warnings ? cvar::config_type_mismatch_warnings->size() : 0;
   found->second->LoadConfigValue(line.get(name));
   if (cvar::config_type_mismatch_warnings && cvar::config_type_mismatch_warnings->size() != mismatches) {
-    error = "Xenia's setting " + name + " does not take " + value;
+    error = std::string("error.xenia_setting_value" TEXT_ARG) + name + TEXT_ARG + value;
     return false;
   }
   return true;
@@ -471,11 +476,11 @@ bool load_savedata(const std::string& host, std::string& error);
 
 bool switch_on(const Options& options, std::string& error) {
   if (g_machine) {
-    error = "the machine is already on";
+    error = "error.already_on";
     return false;
   }
   if (options.renderer != "null" && options.renderer != "vulkan") {
-    error = "no such renderer: " + options.renderer;
+    error = std::string("error.bad_renderer" TEXT_ARG) + options.renderer;
     return false;
   }
   if (!apply_machine_settings(error)) {
@@ -559,8 +564,8 @@ bool switch_on(const Options& options, std::string& error) {
       });
   if (XFAILED(status)) {
     char text[64];
-    std::snprintf(text, sizeof(text), "the emulator did not set up (%08X)", status);
-    error = text;
+    std::snprintf(text, sizeof(text), "%08X", status);
+    error = std::string("error.not_set_up" TEXT_ARG) + text;
     return false;
   }
   // The console's scratch partition, for a game that keeps something there
@@ -572,7 +577,7 @@ bool switch_on(const Options& options, std::string& error) {
     chimera::memfs::mkdirs(scratch.string());
     auto device = std::make_unique<xe::vfs::HostPathDevice>("\\SCRATCH", scratch, false);
     if (!device->Initialize() || !m.emulator->file_system()->RegisterDevice(std::move(device))) {
-      error = "the console's scratch partition could not be mounted";
+      error = "error.no_scratch";
       return false;
     }
     m.emulator->file_system()->RegisterSymbolicLink("scratch:", "\\SCRATCH");
@@ -586,7 +591,7 @@ bool switch_on(const Options& options, std::string& error) {
     if (profiles->GetAccount(kPlayer)) {
       profiles->Login(kPlayer);
     } else if (!profiles->CreateProfile("Player", true, true)) {
-      error = "the console's profile could not be made";
+      error = "error.no_profile";
       return false;
     }
   }
@@ -640,8 +645,8 @@ bool listed(Machine& m, uint64_t xuid, uint32_t title, const xe::Emulator::Conte
     }
   }
   char what[64];
-  std::snprintf(what, sizeof what, "title %08X, kind %08X", title, static_cast<uint32_t>(entry.content_type_));
-  error = name + " was put in the console's storage, but the console does not list it there (" + what + ")";
+  std::snprintf(what, sizeof what, "%08X" TEXT_ARG "%08X", title, static_cast<uint32_t>(entry.content_type_));
+  error = std::string("error.not_listed" TEXT_ARG) + name + TEXT_ARG + what;
   return false;
 }
 
@@ -657,8 +662,7 @@ bool install_package(Machine& m, const std::string& host, std::string& error) {
   const std::string name = base_name(host);
   xe::Emulator::ContentInstallEntry entry{std::filesystem::path(host)};
   if (XFAILED(m.emulator->ProcessContentPackageHeader(host, entry))) {
-    error = name + " is not an Xbox 360 package (" + entry.installation_error_message_ +
-            "): the Content slot takes add-on content, title updates and saved games, each one file as the console keeps it";
+    error = std::string("error.not_package" TEXT_ARG) + name + TEXT_ARG + entry.installation_error_message_;
     return false;
   }
   const auto type = entry.content_type_;
@@ -666,19 +670,17 @@ bool install_package(Machine& m, const std::string& host, std::string& error) {
       type != xe::XContentType::kSavedGame) {
     char kind[16];
     std::snprintf(kind, sizeof kind, "%08X", static_cast<uint32_t>(type));
-    error = name + " is a package of kind " + kind +
-            ", which the Content slot does not take: it takes add-on content (00000002), title updates (000B0000) "
-            "and saved games (00000001). A game itself goes in the Game slot";
+    error = std::string("error.package_kind" TEXT_ARG) + name + TEXT_ARG + kind;
     return false;
   }
   auto* contents = m.emulator->kernel_state()->content_manager();
   auto package = contents->OpenPackage(host);
   if (!package || !package->GetContainerHeader()) {
-    error = name + " could not be opened as a package";
+    error = std::string("error.package_not_opened" TEXT_ARG) + name;
     return false;
   }
   if (package->GetContainerMetadata()->volume_type.get() != xe::kernel::xam::XContentVolumeType::kStfs) {
-    error = name + " is a package of the kind that is a file beside a folder of data (SVOD), which is not supported";
+    error = std::string("error.svod" TEXT_ARG) + name;
     return false;
   }
   const uint64_t owner = package->GetContainerMetadata()->profile_id;
@@ -689,12 +691,12 @@ bool install_package(Machine& m, const std::string& host, std::string& error) {
       !chimera::memfs::mkdirs(entry.header_installation_path_.parent_path().string()) ||
       XFAILED(xe::kernel::xam::ContentManager::ExtractContentHeader(entry.header_installation_path_,
                                                                     *package->GetContainerHeader()))) {
-    error = name + " could not be put in the console's storage";
+    error = std::string("error.not_stored" TEXT_ARG) + name;
     return false;
   }
   if (package->IsReadOnly()) {
     if (!chimera::memfs::graft(file, host)) {
-      error = name + " could not be put in the console's storage";
+      error = std::string("error.not_stored" TEXT_ARG) + name;
       return false;
     }
     m.brought.push_back(file);
@@ -710,7 +712,7 @@ bool install_package(Machine& m, const std::string& host, std::string& error) {
     contents->CloseContentByDeviceName(mounted->GetDevicePath());
   }
   if (XFAILED(status)) {
-    error = name + " could not be unpacked into the console's storage";
+    error = std::string("error.not_unpacked" TEXT_ARG) + name;
     return false;
   }
   return listed(m, owner, title, entry, name, error);
@@ -745,14 +747,14 @@ bool load_savedata(const std::string& host, std::string& error) {
     }
   }
   if (end == std::string::npos) {
-    error = name + " is not a zip: the Save data slot takes the zip Emulator > Export Save Data writes";
+    error = std::string("error.save_not_zip" TEXT_ARG) + name;
     return false;
   }
   const uint16_t count = le16(&zip[end + 10]);
   size_t at = le32(&zip[end + 16]);
   for (uint16_t k = 0; k < count; k++) {
     if (at + 46 > zip.size() || le32(&zip[at]) != 0x02014b50u) {
-      error = name + " is a damaged zip";
+      error = std::string("error.save_damaged" TEXT_ARG) + name;
       return false;
     }
     const uint16_t method = le16(&zip[at + 10]);
@@ -765,17 +767,16 @@ bool load_savedata(const std::string& host, std::string& error) {
       continue;
     }
     if (entry.rfind("content/", 0) != 0 || entry.find("..") != std::string::npos) {
-      error = name + " holds " + entry +
-              ", which is not the console's storage: the zip Emulator > Export Save Data writes has every entry under content/";
+      error = std::string("error.save_not_storage" TEXT_ARG) + name + TEXT_ARG + entry;
       return false;
     }
     if (local + 30 > zip.size() || le32(&zip[local]) != 0x04034b50u) {
-      error = name + " is a damaged zip";
+      error = std::string("error.save_damaged" TEXT_ARG) + name;
       return false;
     }
     const size_t data = local + 30 + le16(&zip[local + 26]) + le16(&zip[local + 28]);
     if (data + packed > zip.size()) {
-      error = name + " is a damaged zip";
+      error = std::string("error.save_damaged" TEXT_ARG) + name;
       return false;
     }
     std::vector<uint8_t> bytes(size);
@@ -784,7 +785,7 @@ bool load_savedata(const std::string& host, std::string& error) {
     } else if (method == 8) {
       zng_stream z{};
       if (zng_inflateInit2(&z, -15) != Z_OK) {
-        error = name + ": " + entry + " could not be unpacked";
+        error = std::string("error.save_entry_not_unpacked" TEXT_ARG) + name + TEXT_ARG + entry;
         return false;
       }
       z.next_in = &zip[data];
@@ -794,16 +795,16 @@ bool load_savedata(const std::string& host, std::string& error) {
       const int r = zng_inflate(&z, Z_FINISH);
       zng_inflateEnd(&z);
       if (r != Z_STREAM_END || z.total_out != size) {
-        error = name + ": " + entry + " could not be unpacked";
+        error = std::string("error.save_entry_not_unpacked" TEXT_ARG) + name + TEXT_ARG + entry;
         return false;
       }
     } else {
-      error = name + ": " + entry + " is packed in a way this core does not read (stored and deflated are read)";
+      error = std::string("error.save_entry_method" TEXT_ARG) + name + TEXT_ARG + entry;
       return false;
     }
     const std::string path = std::string(chimera::memfs::ROOT) + "/" + entry;
     if (!chimera::memfs::mkdirs(path.substr(0, path.rfind('/'))) || !chimera::memfs::put(path, std::move(bytes))) {
-      error = name + ": " + entry + " could not be written into the console's storage";
+      error = std::string("error.save_entry_not_written" TEXT_ARG) + name + TEXT_ARG + entry;
       return false;
     }
   }
@@ -834,8 +835,8 @@ bool boot(const std::string& program, const Options& options, std::string& error
   const xe::X_STATUS status = m.emulator->LaunchPath(program);
   if (XFAILED(status)) {
     char text[64];
-    std::snprintf(text, sizeof(text), "the program did not launch (%08X)", status);
-    error = program + ": " + text;
+    std::snprintf(text, sizeof(text), "%08X", status);
+    error = std::string("error.not_launched" TEXT_ARG) + program + TEXT_ARG + text;
     return false;
   }
   return true;
