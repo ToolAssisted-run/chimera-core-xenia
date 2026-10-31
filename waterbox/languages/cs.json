@@ -109,7 +109,7 @@
 		"suggest.reason.not_opened": "soubor hry se nepodařilo otevřít",
 		"suggest.reason.resolution": "toto jádro kreslí v rozlišení konzole",
 		"suggest.reason.sixty_frames": "snímek je tu vždy jedním z šedesáti za sekundu konzole",
-		"suggest.reason.sound": "zvuk jde do Chimery",
+		"suggest.reason.sound": "zvuk jde do programu Chimera",
 		"suggest.reason.storage": "úložiště konzole patří projektu",
 		"suggest.reason.vulkan": "toto jádro kreslí přes Vulkan, podle nastavení Renderer",
 		"suggest.set": "Nastavit:",
