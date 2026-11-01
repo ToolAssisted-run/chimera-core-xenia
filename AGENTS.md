@@ -33,8 +33,8 @@ design log, with what was decided, why, and what was measured.
 - `waterbox/waterbox.config`, `file_slots.json`, `default_keybinds.json`,
   `package-licenses.json` - what the package declares. Written by hand.
 - `.github/workflows/chimera.yml` - CI: build, test, publish.
-- `build/` - every build output. `tests/roms/` - test games. Both ignored by
-  git.
+- `build/` - every build output. `tests/roms/` - test games
+  (`tests/roms/spin-lock/` for `game:spin-lock`). Both ignored by git.
 
 ## Build and test
 

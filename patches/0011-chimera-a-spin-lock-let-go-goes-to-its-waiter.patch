@@ -1,0 +1,67 @@
+diff --git a/src/xenia/kernel/xboxkrnl/xboxkrnl_threading.cc b/src/xenia/kernel/xboxkrnl/xboxkrnl_threading.cc
+index cea3fbe15..086b45ae7 100644
+--- a/src/xenia/kernel/xboxkrnl/xboxkrnl_threading.cc
++++ b/src/xenia/kernel/xboxkrnl/xboxkrnl_threading.cc
+@@ -1170,6 +1170,20 @@ DECLARE_XBOXKRNL_EXPORT3(NtSignalAndWaitForSingleObjectEx, kThreading,
+ 
+ static void PrefetchForCAS(const void* value) { swcache::PrefetchW(value); }
+ 
++#ifdef CHIMERA_VSCHED
++// chimera: here one guest thread runs at a time, in turns (patch 0003). A
++// thread that lets a spin lock go and takes it again within its own turn -
++// a loop that polls something under the lock - leaves a thread waiting for
++// that lock finding it taken at every one of its turns, for good. On the
++// console the two run on different hardware threads, and the waiter gets
++// the lock in between. So while a thread waits for a spin lock, a thread
++// that lets one go gives its turn away at once, and the waiter takes the
++// lock before the other can run again (chimera#387: Dead or Alive 4's sound
++// waited for a lock a job thread kept taking in such a loop, and the game
++// stopped).
++static uint32_t chimera_spin_lock_waiters = 0;
++#endif
++
+ uint32_t xeKeKfAcquireSpinLock(PPCContext* ctx, X_KSPINLOCK* lock,
+                                bool change_irql) {
+   auto old_irql = change_irql ? xeKfRaiseIrql(ctx, 2) : 0;
+@@ -1182,8 +1196,17 @@ uint32_t xeKeKfAcquireSpinLock(PPCContext* ctx, X_KSPINLOCK* lock,
+       ctx->TranslateVirtualGPR<X_KPCR*>(our_pcr)->prcb_data.current_cpu;
+ 
+   // Lock.
++#ifdef CHIMERA_VSCHED
++  bool chimera_waiting = false;
++#endif
+   while (
+       !xe::atomic_cas(0, xe::byte_swap(our_pcr), &lock->prcb_of_owner.value)) {
++#ifdef CHIMERA_VSCHED
++    if (!chimera_waiting) {
++      chimera_waiting = true;
++      chimera_spin_lock_waiters++;
++    }
++#endif
+     // On real hardware, threads sharing a Xenon HW thread are serialized by
+     // the kernel scheduler — the spinner would be preempted within one
+     // timeslice (~1ms) so the holder can make progress.  In the naive
+@@ -1206,6 +1229,11 @@ uint32_t xeKeKfAcquireSpinLock(PPCContext* ctx, X_KSPINLOCK* lock,
+     }
+     xe::threading::MaybeYield();
+   }
++#ifdef CHIMERA_VSCHED
++  if (chimera_waiting) {
++    chimera_spin_lock_waiters--;
++  }
++#endif
+ 
+   return old_irql;
+ }
+@@ -1222,6 +1250,11 @@ void xeKeKfReleaseSpinLock(PPCContext* ctx, X_KSPINLOCK* lock,
+   assert_true(lock->prcb_of_owner == static_cast<uint32_t>(ctx->r[13]));
+   // Unlock with release semantics to ensure all prior writes are visible.
+   xe::atomic_store_release(0u, &lock->prcb_of_owner.value);
++#ifdef CHIMERA_VSCHED
++  if (chimera_spin_lock_waiters) {
++    xe::threading::MaybeYield();
++  }
++#endif
+ 
+   if (change_irql) {
+     // Unlock.

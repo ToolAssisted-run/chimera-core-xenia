@@ -306,6 +306,37 @@ else
 	fi
 fi
 
+# A spin lock let go goes to the thread waiting for it (patch 0011, chimera
+# issue 387). Here one guest thread runs at a time, in turns. A thread that
+# let a spin lock go and took it again within its own turn - a loop polling
+# something under the lock - left a thread waiting for that lock finding it
+# taken at every one of its turns, for good. In Dead or Alive 4 at a CPU
+# Speed of 2000, with the menu presses of the report's movie, the game's
+# sound waited for a lock a job thread kept taking that way, the main thread
+# waited for that job, and from frame 4945 on the game read its controls no
+# more. Fixed, it reads them on most frames from 5000 to 5200; before the
+# fix, on none. It needs an image of that game, which this repository may not
+# hold: XENIA_TEST_SPIN_LOCK_GAME, or one .iso in tests/roms/spin-lock/ (it
+# was measured on "Dead or Alive 4 (USA Europe) (Rev 1)").
+spin_game="${XENIA_TEST_SPIN_LOCK_GAME:-$(ls "$root"/tests/roms/spin-lock/*.iso 2>/dev/null | head -1)}"
+if [ ! -x "$wbx/run-wbx" ] || [ ! -f "$wbx/core.wbx" ]; then
+	report "game:spin-lock" SKIP "no build/wbx/core.wbx: run waterbox/build-guest.sh"
+elif [ -z "$spin_game" ] || [ ! -f "$spin_game" ]; then
+	report "game:spin-lock" SKIP "needs an image of Dead or Alive 4 in tests/roms/spin-lock/, or XENIA_TEST_SPIN_LOCK_GAME"
+else
+	# shellcheck disable=SC2046
+	"$wbx/run-wbx" "$wbx/core.wbx" "$spin_game" --instruction-ps 500 --renderer null --frames 5200 --every 100 \
+		--set clear_memory_page_state=true --set protect_zero=false \
+		$(grep '^--press' "$here/tests/spin-lock-presses.txt") > "$work/spin.out" 2> "$work/spin.err"
+	in5000="$(sed -n 's/^at frame=5000 .* inputFrames=\([0-9]*\) .*/\1/p' "$work/spin.out")"
+	in5200="$(sed -n 's/^[a-z]* frame=5200 .* inputFrames=\([0-9]*\) .*/\1/p' "$work/spin.out" | tail -1)"
+	if [ -n "$in5000" ] && [ -n "$in5200" ] && [ $((in5200 - in5000)) -ge 100 ]; then
+		report "game:spin-lock" PASS "the controls were read in $((in5200 - in5000)) of the 200 frames from 5000 to 5200 at a CPU Speed of 2000"
+	else
+		report "game:spin-lock" FAIL "the controls were read in ${in5200:-?} - ${in5000:-?} of the 200 frames from 5000 to 5200: the game stopped (a thread waits for a spin lock for good, chimera#387). $(tail -1 "$work/spin.err")"
+	fi
+fi
+
 # The package in the frontend's own engine (chimera-run, from a Chimera
 # checkout named by CHIMERA_ROOT that has the package installed by
 # waterbox/build-package.sh and an engine with the Vulkan bridge):

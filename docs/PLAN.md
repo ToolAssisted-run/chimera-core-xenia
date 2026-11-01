@@ -1592,3 +1592,49 @@ says it by name. Checked with Chimera's package contract tests on the
 published package with the new declaration. Not tried: a real title update
 applied to its game.
 
+## A spin lock let go goes to its waiter (2026-11-01, chimera #387)
+
+The report: in Dead or Alive 4, once a fight starts, "everything turns
+red". The game's picture was right; what turned red was TAStudio's input
+list, where a red row is a frame in which the game did not read its
+controls. From one frame on the game read them no more: it had stopped.
+
+Reproduced with the menu presses of the report's movie on "Dead or Alive 4
+(USA Europe) (Rev 1)", at the project's CPU Speed of 2000: from frame 4945
+on no frame read the controls, in Chimera's runner and in the sandboxed
+runner with no renderer at all. At the runners' default cost (CPU Speed
+500) it did not happen, nor in the native build at 2000: it needs the
+order the threads happen to run in. The threads, traced: the main thread
+waited, with no time limit, for all of five events, four of them set; the
+thread that sets the fifth polled, in a loop, a field of a sound object
+under a spin lock (taken at the top of the loop, let go and taken again
+each time round, without giving way); the game's sound callback, on the
+audio thread, waited in KeAcquireSpinLockAtRaisedIrql for that lock. Here
+one guest thread runs at a time and a turn ends after a number of
+instructions. The poller's turns always ended at the top of its loop, with
+the lock taken, so at every one of the audio thread's turns the lock was
+taken, for good. On the console the two run on different hardware threads
+and the waiter gets the lock in between.
+
+Patch 0011: while a thread waits for a spin lock, a thread that lets one
+go gives its turn away at once (a count of the threads waiting, kept by
+xeKeKfAcquireSpinLock; xeKeKfReleaseSpinLock yields when it is not zero),
+so the waiter takes the lock before the other can run again. Only in the
+scheduler's build (CHIMERA_VSCHED).
+
+Measured: in the sandbox at CPU Speed 2000, the controls read on 129 of
+the 200 frames from 5000 to 5200 (none before the fix); the report's movie
+in Chimera's runner on the fixed package plays to its end (6509 frames)
+and reaches a fight, Kasumi against Eliot, drawn right, with 699 frames
+that did not read the controls instead of 1595, and the controls read on
+619 of the 1109 frames from the fight's start to the end. The test
+`game:spin-lock` (`waterbox/tests/spin-lock-presses.txt`; the harness now
+takes up to 512 presses) passes with the fix and fails on the published
+Nightly 2026-10-31 core. Not tried: the reporter's own disc image (another
+dump of the game), any other game, a real graphics card, and Windows.
+
+Seen on the way, not changed: on this game the native build and the
+sandbox part ways at frame 8 (one of the main thread's turns runs four
+instructions longer in the sandbox), so their thread schedules differ from
+then on, while each is the same every time. The tests' native-against-
+sandbox comparison is made on Mirror's Edge, where they agree.

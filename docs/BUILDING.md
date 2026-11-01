@@ -121,6 +121,13 @@ which waits by reading the clock in a loop still gives way to the others
   start with no graphics card, the save data export, and that a movie has
   columns only for the controllers that are plugged in.
 
+One test needs another game: Dead or Alive 4, as a disc image in
+`tests/roms/spin-lock/` or named by `XENIA_TEST_SPIN_LOCK_GAME`
+(`game:spin-lock`). It plays the menu presses of the movie in chimera issue
+387 (`waterbox/tests/spin-lock-presses.txt`) in the sandbox at a CPU Speed
+of 2000 and checks that the game still reads its controls from frame 5000
+to 5200. It was measured on "Dead or Alive 4 (USA Europe) (Rev 1)".
+
 The tests that draw are skipped on a machine with no Vulkan driver.
 
 Chimera's own checks of an installed package:
