@@ -840,7 +840,12 @@ PROFILEZIP
 	python3 "$here/tests/make-project.py" "$package" "$work/sp.chimeraProject" "$game" --set=renderer=null --set=cpu_speed=4000 \
 		--file=savedata="$work/sp-in/profile.zip" > "$work/sp-make.out" 2>&1
 	# Xenia's log on, for this run only (the core reads "log"; it is no setting of the package's)
-	python3 -c 'import json, sys; d = json.load(open(sys.argv[1])); d["settings"]["log"] = "1"; json.dump(d, open(sys.argv[1], "w"))' "$work/sp.chimeraProject"
+	python3 -c 'import json, sys, zipfile
+# a project is a zip (since 2026-11-02): its project.json changed, the input kept
+z = zipfile.ZipFile(sys.argv[1]); parts = {n: z.read(n) for n in z.namelist()}; z.close()
+d = json.loads(parts["project.json"]); d["settings"]["log"] = "1"; parts["project.json"] = json.dumps(d).encode()
+with zipfile.ZipFile(sys.argv[1], "w", zipfile.ZIP_DEFLATED) as o:
+    [o.writestr(n, b) for n, b in parts.items()]' "$work/sp.chimeraProject"
 	env -u DISPLAY "$engine" --project "$work/sp.chimeraProject" "$package" --files "$(dirname "$game")" --files "$work/sp-in" \
 		--frames 30 --record "$work/sp.movie" --core-log "$work/sp-core.log" > "$work/sp.out" 2>&1
 	sp=$?
