@@ -88,9 +88,9 @@ If you do not have it, say so in your report.
 
 ## Publishing
 
-CI publishes the package: a `dev` release on every push to `main` whose
-tests pass, and a dated `nightly` when `main` moved. A package built by hand
-is stamped `<commit>+local` and is for testing only.
+CI publishes the package: a dated `nightly` when `main` moved and its tests
+pass. A package built by hand is stamped `<commit>+local` and is for testing
+only.
 
 ## What is not done
 
