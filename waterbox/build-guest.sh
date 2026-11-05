@@ -93,6 +93,9 @@ link_wbx() { # <name> <archive of the program>
 		echo "$1.wbx did not link: build/link-$1.log" >&2
 		return 1
 	}
+	# where the code reads its thread pointer, listed in the image: an Intel Mac
+	# rewrites those reads as the core loads (miniBox's wbx-tp-rewrite.py)
+	python3 "$mb/source/guest/wbx-tp-rewrite.py" "$out/$1.wbx"
 	sh "$mb/source/guest/check-wbx.sh" "$out/$1.wbx"
 	echo "built: build/wbx/$1.wbx"
 }
