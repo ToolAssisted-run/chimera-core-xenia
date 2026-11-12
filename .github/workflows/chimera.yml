@@ -37,7 +37,10 @@ jobs:
 
   gate:
     name: build and test (package, instruction tests, Chimera's package checks)
-    runs-on: ubuntu-latest
+    # Ubuntu 24.04, not ubuntu-latest: on GitHub's 26.04 image GCC builds for
+    # x86-64-v3 (AVX2, FMA) by default, so a core built there would not run
+    # on an older processor and would round floating point differently
+    runs-on: ubuntu-24.04
     timeout-minutes: 330
     steps:
       - uses: actions/checkout@v6
