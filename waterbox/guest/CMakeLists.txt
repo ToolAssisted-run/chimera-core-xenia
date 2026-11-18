@@ -30,8 +30,10 @@ add_library(xenia-guest-core STATIC
   ${CMAKE_CURRENT_SOURCE_DIR}/guest-libc.cc
 )
 target_compile_definitions(xenia-guest-core PRIVATE XBYAK_NO_OP_NAMES XBYAK_ENABLE_OMITTED_OPERAND CHIMERA_MEMFS=1)
-# vk-bridge.h only: the bridge's own Vulkan headers are not Xenia's
-target_include_directories(xenia-guest-core PRIVATE $ENV{MINIBOX_DIR}/source/vk)
+# vk-bridge.h only: the bridge's own Vulkan headers are not Xenia's; and
+# miniBox's guest kit, for the core's windows (waterbox_windows.h)
+target_include_directories(xenia-guest-core PRIVATE $ENV{MINIBOX_DIR}/source/vk
+  $ENV{MINIBOX_DIR}/source/guest/include $ENV{MINIBOX_DIR}/extern/emulibc)
 target_link_libraries(xenia-guest-core PUBLIC
   xenia-apu xenia-base xenia-core xenia-cpu xenia-cpu-backend-x64
   xenia-gpu xenia-gpu-null xenia-gpu-vulkan

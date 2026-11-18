@@ -14,6 +14,14 @@
 #include "suggest.h"
 #include "xenia_driver.h"
 
+/* this core's windows in Chimera's Emulator menu: miniBox's ready-made Export
+ * Save Data, built on its exports (Chimera has no tool of its own for a core,
+ * Chimera issue 610) */
+#ifdef CHIMERA_GUEST  /* the native reference has no windows */
+#define WBX_WINDOWS_IMPLEMENTATION
+#include <waterbox_windows.h>
+#endif
+
 #ifdef CHIMERA_GUEST
 #include "vk-bridge.h"
 #endif
