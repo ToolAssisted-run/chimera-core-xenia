@@ -1,0 +1,118 @@
+diff --git a/src/xenia/base/string.cc b/src/xenia/base/string.cc
+index dbd6b5f5d..085afd3a2 100644
+--- a/src/xenia/base/string.cc
++++ b/src/xenia/base/string.cc
+@@ -11,6 +11,8 @@
+ 
+ #include <string.h>
+ 
++#include <cstdint>
++
+ #include "xenia/base/platform.h"
+ #if XE_PLATFORM_WIN32
+ #include "xenia/base/platform_win.h"
+@@ -28,6 +30,47 @@
+ 
+ namespace utfcpp = utf8;
+ 
++#if !XE_PLATFORM_WIN32
++namespace {
++
++// Windows-1252 bytes 0x80-0x9F as Unicode. The five bytes Windows leaves
++// undefined (0x81, 0x8D, 0x8F, 0x90, 0x9D) map to the same-numbered control
++// code point, as Windows does.
++constexpr uint16_t kWin1252High[32] = {
++    0x20AC, 0x0081, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021,
++    0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0x008D, 0x017D, 0x008F,
++    0x0090, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014,
++    0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0x009D, 0x017E, 0x0178};
++
++// The Windows-1252 byte for a code point, or -1 if it has none.
++int CodePointToWin1252(uint32_t cp) {
++  if (cp < 0x80 || (cp >= 0xA0 && cp <= 0xFF)) {
++    return static_cast<int>(cp);
++  }
++  for (uint32_t i = 0; i < 32; ++i) {
++    if (kWin1252High[i] == cp) {
++      return static_cast<int>(0x80 + i);
++    }
++  }
++  return -1;
++}
++
++void AppendUtf8(std::string& out, uint32_t cp) {
++  if (cp < 0x80) {
++    out.push_back(static_cast<char>(cp));
++  } else if (cp < 0x800) {
++    out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
++    out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
++  } else {
++    out.push_back(static_cast<char>(0xE0 | (cp >> 12)));
++    out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
++    out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
++  }
++}
++
++}  // namespace
++#endif  // !XE_PLATFORM_WIN32
++
+ namespace xe {
+ 
+ int xe_strcasecmp(const char* string1, const char* string2) {
+@@ -93,8 +136,37 @@ std::string utf8_to_win1252(const std::string_view source) {
+   std::string output_str(buf.begin(), buf.end());
+   return output_str;
+ #else
+-  // TODO: Use iconv on POSIX.
+-  std::string output_str(source);
++  // Plain table code, no iconv (the sandbox has none). Input that is not
++  // valid UTF-8 never throws: a byte that does not start a sequence, a
++  // sequence that is cut short and a code point with no Windows-1252 byte each
++  // become '_', the default character the Windows code above uses.
++  std::string output_str;
++  output_str.reserve(source.size());
++  size_t i = 0;
++  while (i < source.size()) {
++    uint8_t lead = static_cast<uint8_t>(source[i]);
++    size_t extra = lead < 0x80             ? 0
++                   : (lead & 0xE0) == 0xC0 ? 1
++                   : (lead & 0xF0) == 0xE0 ? 2
++                   : (lead & 0xF8) == 0xF0 ? 3
++                                           : size_t(-1);
++    if (extra == size_t(-1)) {
++      output_str.push_back('_');
++      ++i;
++      continue;
++    }
++    uint32_t cp = extra == 0 ? lead : lead & (0x3F >> extra);
++    size_t used = 1;
++    while (used <= extra && i + used < source.size() &&
++           (static_cast<uint8_t>(source[i + used]) & 0xC0) == 0x80) {
++      cp = (cp << 6) | (static_cast<uint8_t>(source[i + used]) & 0x3F);
++      ++used;
++    }
++    bool whole = used == extra + 1;
++    i += used;
++    int byte = whole ? CodePointToWin1252(cp) : -1;
++    output_str.push_back(byte < 0 ? '_' : static_cast<char>(byte));
++  }
+   return output_str;
+ #endif
+ }
+@@ -130,8 +202,14 @@ std::string win1252_to_utf8(const std::string_view source) {
+   std::string output_str(buf.begin(), buf.end());
+   return output_str;
+ #else
+-  // TODO: Use iconv on POSIX.
+-  std::string output_str(source);
++  // Plain table code, no iconv. Every byte has a code point, so this cannot
++  // fail, and what it returns is always valid UTF-8.
++  std::string output_str;
++  output_str.reserve(source.size() * 2);
++  for (char c : source) {
++    uint8_t b = static_cast<uint8_t>(c);
++    AppendUtf8(output_str, b >= 0x80 && b < 0xA0 ? kWin1252High[b - 0x80] : b);
++  }
+   return output_str;
+ #endif
+ }

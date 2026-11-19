@@ -1638,3 +1638,82 @@ sandbox part ways at frame 8 (one of the main thread's turns runs four
 instructions longer in the sandbox), so their thread schedules differ from
 then on, while each is the same every time. The tests' native-against-
 sandbox comparison is made on Mirror's Edge, where they agree.
+
+
+## A file name with an accented letter stopped the core (2026-11-19, issue 4)
+
+**Reported:** Castle of Illusion Starring Mickey Mouse (2013, Xbox Live
+Arcade) stops while starting: "the core aborted. It said: terminate called
+after throwing an instance of 'utf8::not_enough_room', what(): Not enough
+space". It was also said that the Vulkan picture "looks like ReShade" and
+that loading a branch crashes; those two are not settled here (below).
+
+**What broke.** The game's container lists 17 file names. One of them is
+`Achievements_CastleD` + the byte E9 + `cor.png`: the letter e with an acute
+accent, stored as one byte. A console's container stores names in
+Windows-1252, where E9 is that letter; it is not valid UTF-8. Xenia turns
+every name read from a container or a disc image into UTF-8 with
+`win1252_to_utf8` (the three readers: `stfs_container_device.cc`,
+`svod_container_device.cc`, `disc_image_device.cc`). On Windows that function
+converts. On every other system it returned the bytes unchanged ("TODO: Use
+iconv on POSIX"), so the raw E9 reached Xenia's checked UTF-8 code, which
+throws, and nothing catches it. This core always runs Xenia's non-Windows
+code inside the sandbox, even when Chimera itself is on Windows, so every
+user met it, with any game whose file names have such a letter. A copy of the
+reporter's container with only that one byte changed to a plain `e` ran.
+
+**The fix (patch 0012, `base/string.cc`).** On systems other than Windows both
+conversions are now written out with the Windows-1252 table, in plain code
+(no iconv, which the sandbox does not have). From Windows-1252: bytes
+00-7F and A0-FF are the same code points; 80-9F go through the table, and
+the five bytes Windows leaves undefined (81, 8D, 8F, 90, 9D) become the
+control code points of the same number, as Windows does. To Windows-1252: the
+reverse, and a code point with no byte, or UTF-8 that is not valid, becomes
+`_`, the default character the Windows code uses; it never throws. The
+Windows code is untouched. `utf8_to_win1252` is not called anywhere else in
+Xenia at this commit, so no name the game asks for is turned back by it; the
+two conversions agree anyway (every byte goes through both and returns). The
+file is in no other patch, so it has a patch of its own.
+
+**The test `container:names`** (`waterbox/run-gate.sh`;
+`waterbox/tests/make-container.py` got `--extra-name`). It makes the same
+container as `container:launch` from the Mirror's Edge disc image with one
+more file called `Achievements_Caf` + E9 + `_` + 80 + 9F + `.png` (three
+Windows-1252 bytes, none valid UTF-8), runs 120 frames natively and in the
+sandbox, and wants the same lines from both, the program started, and no
+"terminate called" in either. Nothing of the game is in the repository.
+
+**Measured** (jaffanator01, GCC 14, miniBox's guest toolchain built from GCC
+14.2.0):
+
+- The test script: 33 passed, 0 failed, 2 skipped (`game:spin-lock` needs a
+  Dead or Alive image, `frontend:full-hd` needs DuckTales: Remastered).
+  `container:names` passes: frame 120, 8,314 thread switches, the same
+  natively and in the sandbox. The disc game's results are what they were
+  (frame 300: 258,932 thread switches, memory 64bc985a2c3c692b).
+- The new test was broken on purpose once: with patch 0012 left out (the
+  tree and package built from the original `string.cc`), the same container
+  aborts with the reporter's message, natively (exit 134) and in the sandbox
+  (exit 1), and the test would fail. Put back, the package is the same file
+  as before (sha1 4bfc9bd5...).
+- All 256 Windows-1252 bytes go to UTF-8 and back to the same byte; invalid
+  UTF-8 (a lone FF, a cut-off sequence, a four-byte character) gives `_` and
+  does not throw (a small program built on the new `string.cc`).
+- The reporter's own container, with the new package in `chimera-run` (a
+  project made from it, 1280x720): 600 frames run to the Disney logo (frame
+  599) and were recorded to a movie; playing that movie back gives the same
+  pictures at frames 300 and 599 (byte for byte). A `--rerecord` run (the
+  machine saved and loaded around every frame, each load a new graphics
+  device) of 300 frames finished with exit 0.
+
+**Not proved.** The graphics device in all these runs was llvmpipe (Mesa's
+software Vulkan driver); the container has no NVIDIA driver, so the machine's
+GTX 1060 was not used and nothing is said of a real card. The picture: frame
+599 is the Disney logo in a dark theatre with curtains and silhouettes, frame
+300 the same theatre almost black (the game fades in); nothing there looks
+like a colour filter, but a software driver is not what the reporter uses, so
+the "ReShade" look is not explained. Loading a branch in Chimera's window was
+not tried; the `--rerecord` run uses the same save and load path and passed.
+The game was run for 600 frames only, to its intro: nothing is said of
+playing it. The Windows build of the core was not run: the changed code is
+the non-Windows branch only, which the sandbox build uses on every system.

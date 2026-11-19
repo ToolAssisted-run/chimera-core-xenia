@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 """Makes an Xbox Live Arcade style container out of a game disc image.
 
-  make-container.py [--kind <hex>] <disc image .iso> <container to write> [<file in the image>...]
+  make-container.py [--kind <hex>] [--extra-name <name>] <disc image .iso> <container to write> [<file in the image>...]
 
 --kind is the content kind the container says it is: 000D0000, an Arcade
 game, unless another is named (00000002 is add-on content, chimera issue
 271).
+
+--extra-name adds one more small file, with made-up contents, whose name is
+given with Python escapes: 'Achievements_Caf\\xe9.png' is a name with the one
+byte E9, which is a letter in Windows-1252 and not valid UTF-8. A real
+container's file names are in Windows-1252 (chimera-core-xenia issue 4).
 
 An Xbox Live Arcade game is one file with no extension: a "LIVE" container
 (the console's STFS format) with the game's program, default.xex, and its
@@ -96,6 +101,10 @@ def main():
     if len(sys.argv) > 2 and sys.argv[1] == "--kind":
         kind = int(sys.argv[2], 16)
         del sys.argv[1:3]
+    extra_name = None
+    if len(sys.argv) > 2 and sys.argv[1] == "--extra-name":
+        extra_name = sys.argv[2].encode("ascii").decode("unicode_escape")
+        del sys.argv[1:3]
     if len(sys.argv) < 3:
         raise SystemExit(__doc__)
     wanted = [n.lower() for n in sys.argv[3:]] or ["default.xex"]
@@ -121,6 +130,9 @@ def main():
                 key, value = struct.unpack_from(">II", xex, 24 + i * 8)
                 if key == 0x00040006:  # execution info
                     title_id = struct.unpack_from(">I", xex, value + 12)[0]
+
+    if extra_name is not None:
+        files.append((extra_name, b"not a game file\n" * 64))
 
     # block 0 is the directory; each file follows, its blocks one after another
     chains = {}  # data block -> next data block

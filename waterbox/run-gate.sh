@@ -606,6 +606,32 @@ else
 		report "container:launch" FAIL "native [$(last "$work/cn.out")] sandbox [$(last "$work/cw.out")] $(tail -1 "$work/cw.err")"
 	fi
 fi
+# A container's file names are in Windows-1252, and a name with a letter such
+# as e-acute is one byte that is not valid UTF-8 (chimera-core-xenia issue 4:
+# Castle of Illusion has "Achievements_Castle" + E9 + "cor.png"). The core used
+# to hand that byte to Xenia's UTF-8 code, which threw and ended the core while
+# the container was mounted. The same container as above, with one more file
+# whose name has such a byte, must be mounted and its program run, the same
+# natively and in the sandbox.
+if [ "$have_native" = 0 ]; then
+	report "container:names" SKIP "$why_native"
+elif [ "$have_sandbox" = 0 ]; then
+	report "container:names" SKIP "$why_sandbox"
+elif ! python3 "$here/tests/make-container.py" --extra-name 'Achievements_Caf\xe9_\x80\x9f.png' "$game" "$work/container-names" > "$work/container-names.out" 2>&1; then
+	report "container:names" FAIL "the test container could not be made: $(tail -1 "$work/container-names.out")"
+else
+	"$run" "$work/container-names" "$work/nn-work" --instruction-ps "$cost_fast" --frames 120 --every 30 > "$work/nn.out" 2> "$work/nn.err"
+	"$wbx/run-wbx" "$wbx/core.wbx" "$work/container-names" --instruction-ps "$cost_fast" --frames 120 --every 30 > "$work/nw.out" 2> "$work/nw.err"
+	nram30="$(sed -n 's/^at frame=30 .* ramHash=\([0-9a-f]*\) .*/\1/p' "$work/nw.out")"
+	nram60="$(sed -n 's/^at frame=60 .* ramHash=\([0-9a-f]*\) .*/\1/p' "$work/nw.out")"
+	if [ -s "$work/nn.out" ] && cmp -s "$work/nn.out" "$work/nw.out" && grep -q "^end frame=120 " "$work/nw.out" &&
+		[ -n "$nram30" ] && [ "$nram30" != "$nram60" ] && grep -q "the program asked the console to end it" "$work/nw.err" &&
+		! grep -q "terminate called" "$work/nn.err" "$work/nw.err" "$work/nw.out"; then
+		report "container:names" PASS "a container with a file named with the Windows-1252 bytes E9, 80 and 9F is mounted and its program run, the same natively and in the sandbox: $(last "$work/nw.out")"
+	else
+		report "container:names" FAIL "native [$(last "$work/nn.out")] sandbox [$(last "$work/nw.out")] $(tail -2 "$work/nw.err" | tr '\n' ' ')"
+	fi
+fi
 # And the package takes it from the frontend's engine: a file with no
 # extension, named on the command line as a game is.
 if [ -z "$chimera_root" ] || [ ! -x "$engine" ] || [ ! -f "$package" ]; then

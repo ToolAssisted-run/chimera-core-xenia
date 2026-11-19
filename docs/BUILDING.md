@@ -105,6 +105,8 @@ which waits by reading the clock in a loop still gives way to the others
 - a container made from the disc image's own program
   (`waterbox/tests/make-container.py`) is mounted and its program run, the
   same natively and in the sandbox, and Chimera's headless runner starts it;
+  the same with one more file in the container whose name has letters stored
+  as Windows-1252 bytes (`container:names`);
 - a setting of Xenia's that a project sets reaches Xenia: with Fill New
   Memory the console's memory is another (the runners take a project
   setting as `--set name=value`);
